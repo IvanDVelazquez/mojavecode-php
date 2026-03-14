@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy"
+    content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' blob:; worker-src 'self' blob:; font-src 'self' data:; img-src 'self' data:;">
+  <title>MojaveCode PHP</title>
+  <!--
+    NOTA: En un proyecto real con bundler (webpack/vite), los CSS
+    de Monaco y xterm se importarían via JS. Acá los linkamos
+    directamente desde node_modules para mantenerlo simple.
+  -->
+  <link rel="stylesheet" href="../../node_modules/@xterm/xterm/css/xterm.css">
+  <link rel="stylesheet" href="styles/editor.css">
+  <!-- xterm.js y addons se cargan como scripts globales (no son AMD) -->
+  <script src="../../node_modules/@xterm/xterm/lib/xterm.js"></script>
+  <script src="../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+  <script src="../../node_modules/@xterm/addon-web-links/lib/addon-web-links.js"></script>
+</head>
+<body>
+
+  <!-- ═══════════════════════════════════════════
+       CUSTOM TITLEBAR
+       En Electron, frame:false remueve la barra
+       nativa del SO. Dibujamos la nuestra.
+       -webkit-app-region: drag permite arrastrar
+       la ventana desde esta zona.
+       ═══════════════════════════════════════════ -->
+  <div id="titlebar">
+    <div id="titlebar-logo">
+      <span class="logo-icon">MC_</span>
+    </div>
+    <div id="titlebar-title">MojaveCode PHP</div>
+    <div id="titlebar-controls">
+      <button id="btn-minimize" class="titlebar-btn" title="Minimize">─</button>
+      <button id="btn-maximize" class="titlebar-btn" title="Maximize">□</button>
+      <button id="btn-close" class="titlebar-btn close" title="Close">✕</button>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       MAIN LAYOUT
+       Flexbox horizontal: sidebar | editor area
+       ═══════════════════════════════════════════ -->
+  <div id="main-container">
+
+    <!-- SIDEBAR: activity bar + file tree -->
+    <div id="sidebar">
+      <div id="sidebar-header">
+        <span>EXPLORER</span>
+        <div id="sidebar-header-actions">
+          <button id="btn-open-terminal" title="Open Terminal">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+          </button>
+          <button id="btn-toggle-git" title="Source Control">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/></svg>
+          </button>
+          <button id="btn-open-folder" title="Open Folder">📂</button>
+        </div>
+      </div>
+      <div id="explorer-sections">
+        <!-- FILE TREE (colapsable) -->
+        <div class="sidebar-section" id="section-files">
+          <div class="sidebar-section-header" data-section="files">
+            <span class="sidebar-section-chevron">▾</span>
+            <span class="sidebar-section-title">FILES</span>
+          </div>
+          <div class="sidebar-section-body" id="file-tree">
+            <div id="file-tree-empty">
+              <p>No folder opened</p>
+              <button id="btn-open-folder-cta">Open Folder</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- OUTLINE (colapsable) -->
+        <div class="sidebar-section" id="section-outline">
+          <div class="sidebar-section-header" data-section="outline">
+            <span class="sidebar-section-chevron">▾</span>
+            <span class="sidebar-section-title">OUTLINE</span>
+          </div>
+          <div class="sidebar-section-body" id="outline-list">
+            <div id="outline-empty">No file open</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- GIT PANEL (oculto por defecto) -->
+      <div id="git-panel" style="display:none">
+        <div id="git-commit-box">
+          <input id="git-commit-input" type="text" placeholder="Commit message..." />
+          <button id="git-commit-btn" title="Commit">✓</button>
+        </div>
+
+        <div class="git-section">
+          <div class="git-section-header" data-section="staged">
+            <span class="git-section-chevron">▾</span>
+            <span class="git-section-title">Staged Changes</span>
+            <span class="git-section-count" id="git-staged-count">0</span>
+          </div>
+          <div class="git-section-list" id="git-staged-list"></div>
+        </div>
+
+        <div class="git-section">
+          <div class="git-section-header" data-section="unstaged">
+            <span class="git-section-chevron">▾</span>
+            <span class="git-section-title">Changes</span>
+            <span class="git-section-count" id="git-unstaged-count">0</span>
+          </div>
+          <div class="git-section-list" id="git-unstaged-list"></div>
+        </div>
+
+        <div class="git-section">
+          <div class="git-section-header" data-section="untracked">
+            <span class="git-section-chevron">▾</span>
+            <span class="git-section-title">Untracked</span>
+            <span class="git-section-count" id="git-untracked-count">0</span>
+          </div>
+          <div class="git-section-list" id="git-untracked-list"></div>
+        </div>
+
+        <div id="git-graph-placeholder">
+          <button id="btn-git-graph" title="Git Graph">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/></svg>
+            <span>Git Graph</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- EDITOR AREA: tabs + monaco + terminal -->
+    <div id="editor-area">
+
+      <!-- TAB BAR -->
+      <div id="tab-bar"></div>
+
+      <!-- MONACO EDITOR CONTAINER -->
+      <div id="editor-container">
+        <!-- Welcome screen (se oculta al abrir un archivo) -->
+        <div id="welcome">
+          <div class="welcome-logo">MC_</div>
+          <div class="welcome-subtitle">MojaveCode PHP Editor</div>
+          <div class="welcome-hint">
+            Open a folder to get started<br>
+            <kbd>Ctrl+O</kbd> Open Folder &nbsp;|&nbsp;
+            <kbd>Ctrl+`</kbd> Toggle Terminal
+          </div>
+        </div>
+      </div>
+
+      <!-- TERMINAL CONTAINER (se muestra como tab) -->
+      <div id="terminal-container"></div>
+
+      <!-- GIT GRAPH CONTAINER (se muestra como tab) -->
+      <div id="git-graph-container"></div>
+
+      <!-- DIFF EDITOR CONTAINER (se muestra como tab) -->
+      <div id="diff-container"></div>
+
+      <!-- ERROR LOG CONTAINER (se muestra como tab) -->
+      <div id="errorlog-container"></div>
+
+    </div>
+  </div>
+
+  <!-- QUICK OPEN DIALOG (Cmd+P) -->
+  <div id="quick-open-overlay" style="display:none">
+    <div id="quick-open">
+      <input id="quick-open-input" type="text" placeholder="Search files by name..." autocomplete="off" spellcheck="false" />
+      <div id="quick-open-results"></div>
+    </div>
+  </div>
+
+  <!-- STATUS BAR -->
+  <div id="statusbar">
+    <div class="status-left">
+      <span id="status-branch">⎇ main</span>
+      <span id="status-errors" title="Error Log">0</span>
+    </div>
+    <div class="status-right">
+      <span id="status-cursor">Ln 1, Col 1</span>
+      <span id="status-language">Plain Text</span>
+      <span id="status-encoding">UTF-8</span>
+      <span id="status-cpu">CPU: --%</span>
+      <span id="status-memory">RAM: --</span>
+    </div>
+  </div>
+
+  <!--
+    SCRIPTS
+    ────────
+    Monaco se carga via su AMD loader (require.js integrado).
+    Esto es necesario porque Monaco no tiene un build ESM simple;
+    su sistema de módulos es AMD (Asynchronous Module Definition).
+
+    En un proyecto con webpack/vite usarías monaco-editor-webpack-plugin
+    para que lo bundlee correctamente. Acá lo hacemos manual.
+  -->
+  <script>
+    // Configurar el AMD loader de Monaco para que encuentre los archivos
+    const amdLoader = document.createElement('script');
+    amdLoader.src = '../../node_modules/monaco-editor/min/vs/loader.js';
+    amdLoader.onload = () => {
+      const vsPath = '../../node_modules/monaco-editor/min/vs';
+      require.config({
+        paths: { vs: vsPath },
+      });
+
+      // Configurar el worker con ruta absoluta para Electron (file://)
+      // Usamos blob: porque la CSP lo permite para worker-src
+      // workerBasePath apunta a .../min (no .../min/vs) porque Monaco
+      // internamente ya agrega el prefijo vs/ a las rutas de los workers
+      const workerBasePath = new URL('../../node_modules/monaco-editor/min', window.location.href).href;
+      window.MonacoEnvironment = {
+        getWorkerUrl: function (_moduleId, label) {
+          const code =
+            `self.MonacoEnvironment = { baseUrl: '${workerBasePath}/' };\n` +
+            `importScripts('${workerBasePath}/vs/base/worker/workerMain.js');`;
+          const blob = new Blob([code], { type: 'application/javascript' });
+          return URL.createObjectURL(blob);
+        },
+      };
+
+      // Una vez configurado, cargamos nuestro código del renderer
+      require(['vs/editor/editor.main'], () => {
+        // Monaco está listo — cargar el renderer
+        const script = document.createElement('script');
+        script.src = 'renderer.js';
+        script.onload = () => {
+          const lspScript = document.createElement('script');
+          lspScript.src = 'lsp-client.js';
+          document.body.appendChild(lspScript);
+        };
+        document.body.appendChild(script);
+      });
+    };
+    document.body.appendChild(amdLoader);
+  </script>
+</body>
+</html>
