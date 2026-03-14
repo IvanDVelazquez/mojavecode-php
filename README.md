@@ -1,26 +1,30 @@
 # MojaveCode PHP
 
-A lightweight, fast code editor built with Electron by **[MojaveWare](https://mojaveware.com)**.
+A lightweight code editor built for PHP developers by **[MojaveWare](https://mojaveware.com)**.
 
-Combines Monaco Editor (the engine behind VS Code), xterm.js for an integrated terminal, and a custom UI with dark/light themes inspired by the Mojave desert palette.
+Built with Electron, Monaco Editor (the engine behind VS Code), and xterm.js. Comes with Intelephense LSP out of the box — autocomplete, go-to-definition, diagnostics, and signature help for PHP without installing a single extension. Two themes inspired by the Mojave desert palette.
 
 ---
 
 ## Features
 
+### PHP First
+- **Intelephense LSP** built-in — autocomplete, go-to-definition, hover docs, signature help, real-time diagnostics
+- **Blade syntax highlighting** with directive snippets
+- No extensions needed — works out of the box for PHP/Laravel projects
+
 ### Editor
 - **Monaco Editor** with syntax highlighting for 30+ languages
-- **Two themes**: Mojave Dark (deep blues + sunset orange) and Mojave Light (warm sand + deep blue)
-- **Tab management** with unsaved changes warnings
+- **Two themes**: Mojave Dark (deep blues + sunset orange) and Mojave Light (warm sand + deep blue), switchable from the native menu bar
+- **Tab management** with unsaved changes warnings on close
 - **Diff view** (side-by-side, read-only) for staged and unstaged git changes
 - **Find & Replace** (`Cmd+H`)
-- **Quick Open** (`Cmd+P`) with fuzzy file search
+- **Quick Open** (`Cmd+P`) with fuzzy file search across the project
 
 ### Terminal
 - **Integrated terminal** powered by xterm.js + node-pty
 - Full color support, clickable URLs, smooth scrolling
 - Auto-resizes with the editor layout
-- Resets to new project directory on folder switch
 
 ### Git Integration
 - **Source Control panel** with staged, unstaged, and untracked files
@@ -31,13 +35,12 @@ Combines Monaco Editor (the engine behind VS Code), xterm.js for an integrated t
 
 ### Sidebar
 - **File tree** with lazy-loading (only loads folder contents on expand)
-- **Outline panel** with symbols extracted per language (classes, functions, methods, constants, variables)
+- **Outline panel** showing classes, methods, functions, constants, and variables — grouped by kind with collapsible sections
 - Collapsible sections — outline fills available space when file tree is collapsed
 
 ### Developer Tools
-- **Error Log** captures `console.error`, unhandled errors, and rejected promises. Badge in status bar, dedicated tab to inspect
+- **Error Log** captures `console.error`, unhandled errors, and rejected promises. Red badge in status bar, dedicated tab with clear button
 - **System monitor** in status bar showing CPU and RAM usage per instance
-- **LSP support** for PHP via Intelephense (autocomplete, go-to-definition, diagnostics, signature help)
 
 ---
 
@@ -229,24 +232,38 @@ PHP support via Intelephense, managed through `LspManager` (stdio transport, JSO
 
 ## Known Limitations (v0.1.0)
 
-- LSP only supports PHP (Intelephense). Other languages get syntax highlighting but no autocomplete
+- LSP only supports PHP (Intelephense). Other languages get syntax highlighting but no autocomplete/diagnostics
 - No project-wide search (`Cmd+Shift+F`)
 - No git push/pull/branch management (only local staging and commits)
 - No file watcher — external file changes aren't detected until file is reopened
 - No settings UI — font size, tab size, and other preferences are hardcoded
+- No formatter on save (PHP CS Fixer / Pint)
 - Single window only
 
 ---
 
 ## Roadmap
 
+### Next up
 - [ ] Project-wide search (`Cmd+Shift+F`)
-- [ ] Git push/pull and branch management
+- [ ] Git push/pull
+- [ ] Terminal opens in project root directory
+- [ ] PHP CS Fixer / Pint on save
+
+### Planned
+- [ ] Artisan runner (Laravel command palette)
+- [ ] Composer integration (require, install, dump-autoload)
+- [ ] PHPUnit test runner (run test at cursor)
+- [ ] Go to Symbol in project (`Cmd+T`)
 - [ ] File watcher for external changes
 - [ ] Settings/preferences UI
-- [ ] Multi-language LSP support
-- [ ] Extension/plugin system
-- [ ] Multi-window support
+
+### Future
+- [ ] Xdebug integration (breakpoints)
+- [ ] Database viewer (read .env, show tables)
+- [ ] Laravel route list panel
+- [ ] Docker-aware command execution
+- [ ] .env viewer with hidden secrets
 
 ---
 
