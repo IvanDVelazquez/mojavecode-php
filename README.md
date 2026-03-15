@@ -8,6 +8,126 @@ Built with Electron, Monaco Editor, and xterm.js.
 
 ---
 
+## Getting Started
+
+### Prerequisites
+
+- **Node.js** >= 18
+- **npm** >= 9
+- **Git** in PATH
+- **Optional** (for Database Viewer): `mysql` and/or `psql` CLI clients in PATH
+
+### Clone and Install
+
+```bash
+git clone https://github.com/mojaveware/mojavecode-php.git
+cd mojavecode-php
+npm install
+```
+
+### Rebuild native modules
+
+`node-pty` is a C/C++ native module that must be compiled against Electron's version of Node.js. If you skip this step the terminal won't work.
+
+```bash
+npx electron-rebuild
+```
+
+If it fails, try `npm rebuild node-pty`. The editor still launches without it, but the integrated terminal won't be able to run real shell commands.
+
+### Run in development
+
+```bash
+npm run dev
+```
+
+### Run in production mode
+
+```bash
+npm start
+```
+
+---
+
+## Building for Distribution
+
+MojaveCode uses **electron-builder** to package the app. Distributables are output to the `dist/` folder.
+
+### Build for your current platform
+
+```bash
+npm run build
+```
+
+This auto-detects your OS and creates the appropriate package.
+
+### macOS (.dmg)
+
+**Requirements:**
+- macOS (cross-compilation from other platforms is not supported by Apple)
+- Xcode Command Line Tools: `xcode-select --install`
+
+```bash
+npm run build:mac
+```
+
+Output: `dist/MojaveCode PHP-<version>.dmg`
+
+To install, open the `.dmg` and drag MojaveCode PHP to the Applications folder. On first launch macOS may ask you to allow it in System Settings > Privacy & Security since the app is not notarized.
+
+> **Code signing & notarization (optional):** To distribute outside your machine, you need an Apple Developer account. Set the `CSC_LINK` and `CSC_KEY_PASSWORD` environment variables with your `.p12` certificate, and add `"notarize": true` to the `mac` section in `package.json`. See the [electron-builder docs](https://www.electron.build/code-signing) for details.
+
+### Windows (.exe installer)
+
+**Requirements:**
+- Windows 10/11 (or cross-compile from macOS/Linux using Wine — not recommended)
+- Visual Studio Build Tools (for `node-pty` compilation): download from [visualstudio.microsoft.com](https://visualstudio.microsoft.com/visual-cpp-build-tools/) and install the "Desktop development with C++" workload
+
+```bash
+npm run build:win
+```
+
+Output: `dist/MojaveCode PHP Setup <version>.exe`
+
+The installer is built with NSIS. Run the `.exe` to install — it creates a Start Menu shortcut and an uninstaller in Add/Remove Programs. Windows Defender SmartScreen may show a warning since the app is not code-signed.
+
+> **Code signing (optional):** To avoid SmartScreen warnings, sign the executable with an EV or standard code signing certificate. Set `CSC_LINK` and `CSC_KEY_PASSWORD` environment variables before building. See the [electron-builder docs](https://www.electron.build/code-signing).
+
+### Linux (.AppImage)
+
+**Requirements:**
+- A Debian/Ubuntu-based distro (or any distro with `glibc >= 2.31`)
+- Build essentials: `sudo apt install build-essential libx11-dev libxkbfile-dev`
+
+```bash
+npm run build:linux
+```
+
+Output: `dist/MojaveCode PHP-<version>.AppImage`
+
+To run:
+
+```bash
+chmod +x "dist/MojaveCode PHP-<version>.AppImage"
+./"dist/MojaveCode PHP-<version>.AppImage"
+```
+
+AppImage is a portable format — no installation needed. For desktop integration (app launcher icon), use [AppImageLauncher](https://github.com/TheAssassin/AppImageLauncher) or move the file to `~/Applications/` and create a `.desktop` entry manually.
+
+> **Alternative targets:** You can change the Linux target in `package.json` under `build.linux.target` to `deb`, `rpm`, or `snap` if you prefer a native package format.
+
+### Cross-compilation notes
+
+| Building on | macOS | Windows | Linux |
+|---|---|---|---|
+| **macOS** | native | not supported | not supported |
+| **Windows** | not supported | native | not supported |
+| **Linux** | not supported | not supported | native |
+
+Electron-builder technically supports some cross-compilation scenarios, but `node-pty` (native C++ module) must be compiled for the target OS. The most reliable approach is to build on each platform natively, or use CI (GitHub Actions) with a matrix of `macos-latest`, `windows-latest`, and `ubuntu-latest` runners.
+
+---
+
 ## Features
 
 ### Editor Core
@@ -104,57 +224,6 @@ Accessible from the sidebar action bar or View menu. Executes `php artisan route
 | `Cmd+-` | Zoom out |
 | `Cmd+0` | Reset zoom |
 | `Cmd+D` | Add selection to next match (multi-cursor) |
-
----
-
-## Getting Started
-
-### Prerequisites
-
-- **Node.js** >= 18
-- **npm** >= 9
-- **Git** in PATH
-- **Build tools** for your OS:
-  - **macOS**: `xcode-select --install`
-  - **Windows**: Visual Studio Build Tools
-  - **Linux**: `sudo apt install build-essential`
-- **Optional** (for Database Viewer): `mysql` and/or `psql` CLI clients in PATH
-
-### Install
-
-```bash
-git clone https://github.com/mojaveware/mojavecode-php.git
-cd mojavecode-php
-npm install
-
-# Recompile node-pty for Electron
-npx electron-rebuild
-```
-
-> `node-pty` is a native C/C++ module. If the rebuild fails, try `npm rebuild node-pty`. The editor works without it, but the terminal won't be able to run real shell commands.
-
-### Run (development)
-
-```bash
-npm run dev
-```
-
-### Run (production mode)
-
-```bash
-npm start
-```
-
-### Build distributable
-
-```bash
-npm run build          # Current platform
-npm run build:mac      # macOS (.dmg)
-npm run build:win      # Windows (.exe)
-npm run build:linux    # Linux (.AppImage)
-```
-
-Outputs go to `dist/`.
 
 ---
 
