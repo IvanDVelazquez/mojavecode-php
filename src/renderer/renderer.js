@@ -487,55 +487,40 @@ class ${className}
   }
 }
 
+// Registry de tabs especiales: mapea path (o prefijo) a su container y config.
+// Para agregar un nuevo tab especial, solo hay que agregar una entrada acá.
+const specialTabs = [
+  { match: '__terminal__',        container: 'terminal-container',       display: 'block', label: 'Terminal',  onActivate: () => { if (state.terminalFitAddon) setTimeout(() => state.terminalFitAddon.fit(), 50); state.terminal?.focus(); } },
+  { match: '__git-graph__',       container: 'git-graph-container',      display: 'block', label: 'Git Graph' },
+  { match: '__diff__',            container: 'diff-container',           display: 'block', label: 'Diff',      prefix: true, onActivate: (tab) => { if (tab.diffEditor) { setTimeout(() => tab.diffEditor.layout(), 50); } else { closeTab(tab.path); } } },
+  { match: '__errorlog__',        container: 'errorlog-container',       display: 'flex',  label: 'Error Log' },
+  { match: '__command-output__',  container: 'command-output-container', display: 'block', label: 'Output' },
+  { match: '__db-viewer__',       container: 'db-viewer-container',      display: 'flex',  label: 'Database' },
+  { match: '__route-list__',      container: 'route-list-container',     display: 'flex',  label: 'Routes' },
+];
+
 function activateTab(tab) {
   state.activeTab = tab;
   document.getElementById('welcome').style.display = 'none';
 
-  const isTerminal = tab.path === '__terminal__';
-  const isGitGraph = tab.path === '__git-graph__';
-  const isDiff = tab.path.startsWith('__diff__');
-  const isErrorLog = tab.path === '__errorlog__';
-  const isCommandOutput = tab.path === '__command-output__';
-  const isDbViewer = tab.path === '__db-viewer__';
-  const isRouteList = tab.path === '__route-list__';
+  // Buscar si es un tab especial
+  const special = specialTabs.find((s) =>
+    s.prefix ? tab.path.startsWith(s.match) : tab.path === s.match
+  );
 
-  // Mostrar solo el container correcto
-  const isEditor = !isTerminal && !isGitGraph && !isDiff && !isErrorLog && !isCommandOutput && !isDbViewer && !isRouteList;
-  document.getElementById('editor-container').style.display = isEditor ? 'block' : 'none';
-  document.getElementById('terminal-container').style.display = isTerminal ? 'block' : 'none';
-  document.getElementById('git-graph-container').style.display = isGitGraph ? 'block' : 'none';
-  document.getElementById('diff-container').style.display = isDiff ? 'block' : 'none';
-  document.getElementById('errorlog-container').style.display = isErrorLog ? 'flex' : 'none';
-  document.getElementById('command-output-container').style.display = isCommandOutput ? 'block' : 'none';
-  document.getElementById('db-viewer-container').style.display = isDbViewer ? 'flex' : 'none';
-  document.getElementById('route-list-container').style.display = isRouteList ? 'flex' : 'none';
+  // Ocultar todos los containers, mostrar solo el que corresponde
+  const activeContainer = special ? special.container : 'editor-container';
+  document.getElementById('editor-container').style.display = 'none';
+  for (const s of specialTabs) {
+    document.getElementById(s.container).style.display = 'none';
+  }
+  document.getElementById(activeContainer).style.display = special ? special.display : 'block';
 
-  if (isTerminal) {
-    document.getElementById('status-language').textContent = 'Terminal';
-    if (state.terminalFitAddon) {
-      setTimeout(() => state.terminalFitAddon.fit(), 50);
-    }
-    state.terminal?.focus();
-  } else if (isGitGraph) {
-    document.getElementById('status-language').textContent = 'Git Graph';
-  } else if (isDiff) {
-    document.getElementById('status-language').textContent = 'Diff';
-    if (tab.diffEditor) {
-      setTimeout(() => tab.diffEditor.layout(), 50);
-    } else if (tab.path.startsWith('__diff__')) {
-      // Diff editor fue limpiado por otro diff — cerrar este tab obsoleto
-      closeTab(tab.path);
-      return;
-    }
-  } else if (isErrorLog) {
-    document.getElementById('status-language').textContent = 'Error Log';
-  } else if (isCommandOutput) {
-    document.getElementById('status-language').textContent = 'Output';
-  } else if (isDbViewer) {
-    document.getElementById('status-language').textContent = 'Database';
-  } else if (isRouteList) {
-    document.getElementById('status-language').textContent = 'Routes';
+  if (special) {
+    document.getElementById('status-language').textContent = special.label;
+    if (special.onActivate) special.onActivate(tab);
   } else {
+    // Tab de archivo normal → Monaco editor
     state.editor.setModel(tab.model);
     document.getElementById('status-language').textContent =
       getLanguageDisplayName(tab.language);
@@ -572,8 +557,9 @@ function closeTab(tabPath) {
     document.getElementById('diff-container').innerHTML = '';
   }
 
-  // Notificar al LSP antes de destruir el model (proteger contra doble dispose)
-  if (tab.path !== '__terminal__' && tab.path !== '__git-graph__' && tab.path !== '__errorlog__' && !tab.path.startsWith('__diff__') && tab.model) {
+  // Notificar al LSP y destruir model (solo para tabs de archivo, no especiales)
+  const isSpecialTab = tab.path.startsWith('__');
+  if (!isSpecialTab && tab.model) {
     if (typeof lspUntrackModel === 'function') {
       lspUntrackModel(tab.model);
     }
@@ -616,7 +602,7 @@ function closeAllTabs() {
       if (tab.diffModels) tab.diffModels.forEach((m) => { try { m.dispose(); } catch {} });
       try { tab.diffEditor.dispose(); } catch {}
     }
-    if (tab.model && tab.path !== '__terminal__' && tab.path !== '__git-graph__' && !tab.path.startsWith('__diff__')) {
+    if (tab.model && !tab.path.startsWith('__')) {
       if (typeof lspUntrackModel === 'function') lspUntrackModel(tab.model);
       try { tab.model.dispose(); } catch {}
       tab.model = null;
