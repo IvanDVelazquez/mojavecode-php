@@ -15,6 +15,7 @@ Built with Electron, Monaco Editor, and xterm.js.
 - **Two themes** — Mojave Dark (deep blues + sunset orange) and Mojave Light (warm sand + deep blue), switchable from the native macOS menu bar
 - **Tab management** — unsaved change warnings, modified indicators, multiple special tabs (terminal, git graph, diff, output, database, routes)
 - **Diff view** — side-by-side comparison for staged and unstaged git changes
+- **Zoom** (`Cmd+=` / `Cmd+-` / `Cmd+0`) — adjusts editor font size from 8px to 40px with proportional line height. Percentage indicator in the status bar (click to reset). Persisted across sessions via localStorage
 - **Find & Replace** (`Cmd+H`)
 - **Multi-cursor** (`Cmd+D`) — native Monaco support
 - **Quick Open** (`Cmd+P`) — fuzzy file search across the entire project
@@ -99,6 +100,9 @@ Accessible from the sidebar action bar or View menu. Executes `php artisan route
 | `Cmd+B` | Toggle sidebar |
 | `Cmd+`` ` | Toggle terminal |
 | `Cmd+H` | Find & Replace |
+| `Cmd+=` | Zoom in |
+| `Cmd+-` | Zoom out |
+| `Cmd+0` | Reset zoom |
 | `Cmd+D` | Add selection to next match (multi-cursor) |
 
 ---
@@ -268,7 +272,7 @@ No additional runtime dependencies for database access (uses `mysql`/`psql` CLI)
 
 - LSP only supports PHP (Intelephense). Other languages get syntax highlighting but no autocomplete or diagnostics
 - No file watcher — external file changes aren't detected until the file is reopened
-- No settings UI — font size, tab size, and other preferences are hardcoded
+- No settings UI — tab size and other preferences are hardcoded (font size is adjustable via zoom)
 - Single window only
 - Database viewer requires `mysql` or `psql` CLI installed locally
 - No Xdebug integration (breakpoints/debugging)

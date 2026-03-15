@@ -47,6 +47,13 @@ const state = {
   terminalFitAddon: null,
   terminalResizeObserver: null, // ResizeObserver del terminal container
   formatOnSave: false,         // PHP format on save (desactivado por defecto)
+  zoom: {
+    fontSize: 14,              // Tamaño actual — se restaura desde localStorage al arrancar
+    defaultFontSize: 14,       // Referencia para calcular el % del indicador
+    min: 8,
+    max: 40,
+    step: 1,
+  },
 };
 
 // ┌──────────────────────────────────────────────────┐
@@ -204,8 +211,71 @@ function initEditor() {
     () => state.editor.getAction('editor.action.startFindReplaceAction').run()
   );
 
+  // Zoom — addAction (no addCommand) para no cancelar promesas internas de Monaco
+  state.editor.addAction({
+    id: 'mojavecode.zoomIn',
+    label: 'Zoom In',
+    keybindings: [
+      monaco.KeyMod.CtrlCmd | monaco.KeyCode.Equal,
+      monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.Equal, // Cmd+Shift+= (teclados donde + requiere Shift)
+    ],
+    run: () => editorZoomIn(),
+  });
+
+  state.editor.addAction({
+    id: 'mojavecode.zoomOut',
+    label: 'Zoom Out',
+    keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Minus],
+    run: () => editorZoomOut(),
+  });
+
+  state.editor.addAction({
+    id: 'mojavecode.zoomReset',
+    label: 'Reset Zoom',
+    keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Digit0],
+    run: () => editorZoomReset(),
+  });
+
+  // Restaurar zoom guardado en localStorage
+  const savedSize = parseInt(localStorage.getItem('mojavecode-zoom-fontSize'), 10);
+  if (savedSize >= state.zoom.min && savedSize <= state.zoom.max) {
+    applyZoom(savedSize);
+  }
+  updateZoomIndicator();
+
   // Mostrar welcome screen (el editor se oculta hasta abrir un archivo)
   document.getElementById('welcome').style.display = 'flex';
+}
+
+// ┌──────────────────────────────────────────────────┐
+// │  1b. ZOOM                                        │
+// │  Ajusta fontSize y lineHeight del editor.        │
+// │  Persiste en localStorage y refleja el % en      │
+// │  la status bar (click para resetear).             │
+// └──────────────────────────────────────────────────┘
+function applyZoom(size) {
+  const z = state.zoom;
+  const clamped = Math.max(z.min, Math.min(size, z.max));
+  if (clamped === z.fontSize) return;
+  z.fontSize = clamped;
+  // lineHeight proporcional: ratio 22/14 ≈ 1.57 del default
+  const lineHeight = Math.round(clamped * (22 / 14));
+  state.editor.updateOptions({ fontSize: clamped, lineHeight });
+  localStorage.setItem('mojavecode-zoom-fontSize', clamped);
+  updateZoomIndicator();
+}
+
+function editorZoomIn()    { applyZoom(state.zoom.fontSize + state.zoom.step); }
+function editorZoomOut()   { applyZoom(state.zoom.fontSize - state.zoom.step); }
+function editorZoomReset() {
+  state.zoom.fontSize = state.zoom.defaultFontSize + 1; // forzar que applyZoom actualice
+  applyZoom(state.zoom.defaultFontSize);
+  localStorage.removeItem('mojavecode-zoom-fontSize');
+}
+
+function updateZoomIndicator() {
+  const pct = Math.round((state.zoom.fontSize / state.zoom.defaultFontSize) * 100);
+  document.getElementById('status-zoom').textContent = `${pct}%`;
 }
 
 // ┌──────────────────────────────────────────────────┐
@@ -1915,6 +1985,12 @@ function initEventListeners() {
   window.api.onMenuSave(() => saveCurrentFile());
   window.api.onMenuToggleSidebar(() => toggleSidebar());
   window.api.onMenuToggleTerminal(() => toggleTerminal());
+  window.api.onMenuZoomIn(() => editorZoomIn());
+  window.api.onMenuZoomOut(() => editorZoomOut());
+  window.api.onMenuZoomReset(() => editorZoomReset());
+
+  // Click en indicador de zoom → reset
+  document.getElementById('status-zoom').addEventListener('click', () => editorZoomReset());
   window.api.onMenuSwitchTheme((theme) => switchTheme(theme));
   window.api.onFolderOpened((path) => loadFileTree(path));
   window.api.onFileOpened((path) => {

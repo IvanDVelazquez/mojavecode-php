@@ -179,6 +179,22 @@ function createMenu() {
           click: () => mainWindow?.webContents.send('menu:route-list'),
         }] : []),
         { type: 'separator' },
+        {
+          label: 'Zoom In',
+          accelerator: 'CmdOrCtrl+=',
+          click: () => mainWindow?.webContents.send('menu:zoom-in'),
+        },
+        {
+          label: 'Zoom Out',
+          accelerator: 'CmdOrCtrl+-',
+          click: () => mainWindow?.webContents.send('menu:zoom-out'),
+        },
+        {
+          label: 'Reset Zoom',
+          accelerator: 'CmdOrCtrl+0',
+          click: () => mainWindow?.webContents.send('menu:zoom-reset'),
+        },
+        { type: 'separator' },
         { role: 'toggleDevTools' },
         { role: 'togglefullscreen' },
       ],

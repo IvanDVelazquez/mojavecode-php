@@ -4,6 +4,14 @@
  */
 
 module.exports = {
+  // Editor zoom
+  zoom: {
+    defaultFontSize: 14,
+    minFontSize: 8,
+    maxFontSize: 40,
+    step: 1,
+  },
+
   // Ventana principal
   window: {
     width: 1400,
