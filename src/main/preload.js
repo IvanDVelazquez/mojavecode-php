@@ -75,6 +75,10 @@ contextBridge.exposeInMainWorld('api', {
   onMenuSwitchTheme: (callback) => {
     ipcRenderer.on('menu:switch-theme', (event, theme) => callback(theme));
   },
+  onMenuZoomIn: (callback) => ipcRenderer.on('menu:zoom-in', callback),
+  onMenuZoomOut: (callback) => ipcRenderer.on('menu:zoom-out', callback),
+  onMenuZoomReset: (callback) => ipcRenderer.on('menu:zoom-reset', callback),
+
   onFolderOpened: (callback) => {
     ipcRenderer.on('folder:opened', (event, path) => callback(path));
   },
