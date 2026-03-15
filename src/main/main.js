@@ -729,46 +729,41 @@ ipcMain.handle('git:status', async (event, cwd) => {
   const rootResult = await runGit(['rev-parse', '--show-toplevel'], cwd);
   const repoRoot = rootResult.error ? cwd : rootResult.output;
 
-  const result = await runGit(['status', '--porcelain=v1', '-uall'], cwd);
-  if (result.error) return result;
-
+  const statusMap = { A: 'added', M: 'modified', D: 'deleted', R: 'renamed', C: 'copied' };
   const files = { staged: [], unstaged: [], untracked: [], repoRoot };
-  if (!result.output) return { files };
 
-  for (const line of result.output.split('\n')) {
-    if (!line || line.length < 3) continue;
-    const x = line[0]; // index status
-    const y = line[1]; // worktree status
-    // El path empieza en posición 3 (XY + espacio)
-    let filePath = line.substring(3);
+  function parseNameStatus(output) {
+    if (!output) return [];
+    return output.split('\n').filter(Boolean).map((line) => {
+      const tab = line.indexOf('\t');
+      const code = line.substring(0, tab).trim();
+      let filePath = line.substring(tab + 1).trim();
+      // Renamed: "old\tnew" — tomar el nuevo
+      if (filePath.includes('\t')) filePath = filePath.split('\t').pop();
+      const absolutePath = path.join(repoRoot, filePath);
+      return { path: filePath, absolutePath, status: statusMap[code[0]] || code };
+    });
+  }
 
-    // Manejar renamed: "old -> new"
-    if (filePath.includes(' -> ')) {
-      filePath = filePath.split(' -> ').pop();
-    }
+  // 1. Staged: archivos en el index (git add)
+  const stagedResult = await runGit(['diff', '--cached', '--name-status'], cwd);
+  if (!stagedResult.error && stagedResult.output) {
+    files.staged = parseNameStatus(stagedResult.output);
+  }
 
-    // Quitar comillas si git las agrega
-    if (filePath.startsWith('"') && filePath.endsWith('"')) {
-      filePath = filePath.slice(1, -1);
-    }
+  // 2. Unstaged: cambios en el worktree (no staged)
+  const unstagedResult = await runGit(['diff', '--name-status'], cwd);
+  if (!unstagedResult.error && unstagedResult.output) {
+    files.unstaged = parseNameStatus(unstagedResult.output);
+  }
 
-    // Construir path absoluto
-    const absolutePath = path.join(repoRoot, filePath);
-
-    if (x === '?' && y === '?') {
-      files.untracked.push({ path: filePath, absolutePath, status: 'untracked' });
-    } else {
-      // Staged changes (index)
-      if (x !== ' ' && x !== '?') {
-        const statusMap = { A: 'added', M: 'modified', D: 'deleted', R: 'renamed' };
-        files.staged.push({ path: filePath, absolutePath, status: statusMap[x] || x });
-      }
-      // Unstaged changes (worktree)
-      if (y !== ' ' && y !== '?') {
-        const statusMap = { M: 'modified', D: 'deleted' };
-        files.unstaged.push({ path: filePath, absolutePath, status: statusMap[y] || y });
-      }
-    }
+  // 3. Untracked: archivos nuevos no trackeados
+  const untrackedResult = await runGit(['ls-files', '--others', '--exclude-standard'], cwd);
+  if (!untrackedResult.error && untrackedResult.output) {
+    files.untracked = untrackedResult.output.split('\n').filter(Boolean).map((filePath) => {
+      const absolutePath = path.join(repoRoot, filePath);
+      return { path: filePath, absolutePath, status: 'untracked' };
+    });
   }
 
   return { files };

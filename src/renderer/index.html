@@ -125,32 +125,8 @@
           </button>
         </div>
 
-        <div class="git-section">
-          <div class="git-section-header" data-section="staged">
-            <span class="git-section-chevron">▾</span>
-            <span class="git-section-title">Staged Changes</span>
-            <span class="git-section-count" id="git-staged-count">0</span>
-          </div>
-          <div class="git-section-list" id="git-staged-list"></div>
-        </div>
-
-        <div class="git-section">
-          <div class="git-section-header" data-section="unstaged">
-            <span class="git-section-chevron">▾</span>
-            <span class="git-section-title">Changes</span>
-            <span class="git-section-count" id="git-unstaged-count">0</span>
-          </div>
-          <div class="git-section-list" id="git-unstaged-list"></div>
-        </div>
-
-        <div class="git-section">
-          <div class="git-section-header" data-section="untracked">
-            <span class="git-section-chevron">▾</span>
-            <span class="git-section-title">Untracked</span>
-            <span class="git-section-count" id="git-untracked-count">0</span>
-          </div>
-          <div class="git-section-list" id="git-untracked-list"></div>
-        </div>
+        <!-- Secciones de archivos generadas dinámicamente por renderGitFiles() -->
+        <div id="git-file-sections"></div>
 
         <div id="git-graph-placeholder">
           <button id="btn-git-graph" title="Git Graph">

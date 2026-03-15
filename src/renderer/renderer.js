@@ -522,6 +522,10 @@ function activateTab(tab) {
     document.getElementById('status-language').textContent = 'Diff';
     if (tab.diffEditor) {
       setTimeout(() => tab.diffEditor.layout(), 50);
+    } else if (tab.path.startsWith('__diff__')) {
+      // Diff editor fue limpiado por otro diff — cerrar este tab obsoleto
+      closeTab(tab.path);
+      return;
     }
   } else if (isErrorLog) {
     document.getElementById('status-language').textContent = 'Error Log';
@@ -559,12 +563,12 @@ function closeTab(tabPath) {
     if (!save) return;
   }
 
-  // Limpiar diff editor si aplica
+  // Limpiar diff editor si aplica (dispose editor ANTES que los models)
   if (tab.diffEditor) {
+    try { tab.diffEditor.dispose(); } catch { /* already disposed */ }
     if (tab.diffModels) {
-      tab.diffModels.forEach((m) => m.dispose());
+      tab.diffModels.forEach((m) => { try { m.dispose(); } catch { /* ok */ } });
     }
-    tab.diffEditor.dispose();
     document.getElementById('diff-container').innerHTML = '';
   }
 
@@ -842,7 +846,17 @@ async function openDiffView(relativePath, absolutePath, fileName, staged) {
   const ext = fileName.split('.').pop();
   const language = getMonacoLanguage(ext);
 
-  // Limpiar container y crear diff editor
+  // Limpiar diff editor anterior si existe (otro tab diff abierto)
+  const prevDiff = state.openTabs.find((t) => t.path.startsWith('__diff__') && t.diffEditor);
+  if (prevDiff) {
+    try { prevDiff.diffEditor.dispose(); } catch { /* ok */ }
+    if (prevDiff.diffModels) {
+      prevDiff.diffModels.forEach((m) => { try { m.dispose(); } catch { /* ok */ } });
+    }
+    prevDiff.diffEditor = null;
+    prevDiff.diffModels = null;
+  }
+
   const container = document.getElementById('diff-container');
   container.innerHTML = '';
 
@@ -1602,84 +1616,57 @@ async function refreshGitStatus() {
   if (statusResult.error) return;
 
   const { files } = statusResult;
-
-  renderGitFileList('git-staged-list', 'git-staged-count', files.staged, 'staged');
-  renderGitFileList('git-unstaged-list', 'git-unstaged-count', files.unstaged, 'unstaged');
-  renderGitFileList('git-untracked-list', 'git-untracked-count', files.untracked, 'untracked');
+  renderGitFiles(files);
 }
 
-function renderGitFileList(listId, countId, files, type) {
-  const listEl = document.getElementById(listId);
-  const countEl = document.getElementById(countId);
-  countEl.textContent = files.length;
-  listEl.innerHTML = '';
+/**
+ * Renderiza las 3 secciones del git panel de una sola vez.
+ * Genera todo el HTML como string y lo inyecta con innerHTML.
+ * Event delegation único desde #git-file-sections.
+ */
+function renderGitFiles(files) {
+  const container = document.getElementById('git-file-sections');
+  if (!container) return;
 
-  for (const file of files) {
-    const item = document.createElement('div');
-    item.className = 'git-file-item';
+  function buildSection(title, items, type) {
+    if (!items.length) return '';
 
-    const fileName = file.path.split(/[/\\]/).pop();
-    const statusClass = `git-status-${file.status}`;
-    const statusLabel = file.status[0].toUpperCase();
+    const rows = items.map((file) => {
+      const fileName = file.path.split(/[/\\]/).pop();
+      const statusLabel = file.status[0].toUpperCase();
+      const deletedClass = file.status === 'deleted' ? ' git-file-deleted' : '';
 
-    let actions = '';
-    if (type === 'staged') {
-      actions = `<div class="git-file-actions">
-        <button class="git-action-unstage" data-path="${file.path}" title="Unstage">−</button>
-      </div>`;
-    } else if (type === 'unstaged') {
-      actions = `<div class="git-file-actions">
-        <button class="git-action-stage" data-path="${file.path}" title="Stage">+</button>
-        <button class="git-action-discard" data-path="${file.path}" title="Discard changes">↺</button>
-      </div>`;
-    } else {
-      actions = `<div class="git-file-actions">
-        <button class="git-action-stage" data-path="${file.path}" title="Stage">+</button>
-      </div>`;
-    }
-
-    const deletedClass = file.status === 'deleted' ? ' git-file-deleted' : '';
-    item.innerHTML = `
-      <span class="git-file-name${deletedClass}" title="${file.path}">${fileName}</span>
-      <span class="git-file-status ${statusClass}">${statusLabel}</span>
-      ${actions}`;
-
-    // Click en el nombre abre diff view (o archivo normal si es untracked)
-    item.querySelector('.git-file-name').addEventListener('click', () => {
-      if (file.status === 'deleted') {
-        console.warn('Cannot open deleted file:', file.path);
-        return;
-      }
-      if (type === 'untracked') {
-        openFile(file.absolutePath, fileName);
+      let buttons = '';
+      if (type === 'staged') {
+        buttons = `<button class="git-action-btn" data-action="unstage" data-path="${escapeAttr(file.path)}" data-abs="${escapeAttr(file.absolutePath)}" title="Unstage">−</button>`;
+      } else if (type === 'unstaged') {
+        buttons = `<button class="git-action-btn" data-action="stage" data-path="${escapeAttr(file.path)}" data-abs="${escapeAttr(file.absolutePath)}" title="Stage">+</button>
+          <button class="git-action-btn" data-action="discard" data-path="${escapeAttr(file.path)}" data-abs="${escapeAttr(file.absolutePath)}" title="Discard">↺</button>`;
       } else {
-        openDiffView(file.path, file.absolutePath, fileName, type === 'staged');
+        buttons = `<button class="git-action-btn" data-action="stage" data-path="${escapeAttr(file.path)}" data-abs="${escapeAttr(file.absolutePath)}" title="Stage">+</button>`;
       }
-    });
 
-    listEl.appendChild(item);
+      return `<div class="git-file-item">
+        <span class="git-file-name${deletedClass}" data-type="${type}" data-path="${escapeAttr(file.path)}" data-abs="${escapeAttr(file.absolutePath)}" data-status="${file.status}" title="${escapeAttr(file.path)}">${escapeHtml(fileName)}</span>
+        <span class="git-file-status git-status-${file.status}">${statusLabel}</span>
+        <div class="git-file-actions">${buttons}</div>
+      </div>`;
+    }).join('');
+
+    return `<div class="git-section">
+      <div class="git-section-header" data-section="${type}">
+        <span class="git-section-chevron">▾</span>
+        <span class="git-section-title">${escapeHtml(title)}</span>
+        <span class="git-section-count">${items.length}</span>
+      </div>
+      <div class="git-section-list">${rows}</div>
+    </div>`;
   }
 
-  // Event delegation para las acciones (evita leak de listeners en cada refresh)
-  listEl.addEventListener('click', async (e) => {
-    const btn = e.target.closest('[data-path]');
-    if (!btn) return;
-    e.stopPropagation();
-    const filePath = btn.dataset.path;
-
-    if (btn.classList.contains('git-action-stage')) {
-      await window.api.gitAdd(state.currentFolder, [filePath]);
-      refreshGitStatus();
-    } else if (btn.classList.contains('git-action-unstage')) {
-      await window.api.gitUnstage(state.currentFolder, [filePath]);
-      refreshGitStatus();
-    } else if (btn.classList.contains('git-action-discard')) {
-      if (confirm(`Discard changes to ${filePath}?`)) {
-        await window.api.gitDiscard(state.currentFolder, filePath);
-        refreshGitStatus();
-      }
-    }
-  });
+  container.innerHTML =
+    buildSection('Staged Changes', files.staged, 'staged') +
+    buildSection('Changes', files.unstaged, 'unstaged') +
+    buildSection('Untracked', files.untracked, 'untracked');
 }
 
 async function gitCommit() {
@@ -1736,16 +1723,6 @@ async function gitPush() {
 }
 
 function initGitPanel() {
-  // Sección collapse/expand
-  document.querySelectorAll('.git-section-header').forEach((header) => {
-    header.addEventListener('click', () => {
-      const chevron = header.querySelector('.git-section-chevron');
-      const list = header.nextElementSibling;
-      chevron.classList.toggle('collapsed');
-      list.classList.toggle('collapsed');
-    });
-  });
-
   // Commit
   document.getElementById('git-commit-btn').addEventListener('click', gitCommit);
   document.getElementById('git-commit-input').addEventListener('keydown', (e) => {
@@ -1759,6 +1736,74 @@ function initGitPanel() {
   // Git graph — abrir como tab
   document.getElementById('btn-git-graph')?.addEventListener('click', () => {
     openGitGraph();
+  });
+
+  // Event delegation único para todo el panel de archivos git
+  const sectionsEl = document.getElementById('git-file-sections');
+
+  sectionsEl.addEventListener('click', async (e) => {
+    // Collapse/expand de secciones
+    const header = e.target.closest('.git-section-header');
+    if (header) {
+      const chevron = header.querySelector('.git-section-chevron');
+      const list = header.nextElementSibling;
+      if (chevron && list) {
+        chevron.classList.toggle('collapsed');
+        list.classList.toggle('collapsed');
+      }
+      return;
+    }
+
+    // Click en nombre de archivo → abrir diff o archivo
+    const nameEl = e.target.closest('.git-file-name');
+    if (nameEl) {
+      const filePath = nameEl.dataset.path;
+      const absPath = nameEl.dataset.abs;
+      const status = nameEl.dataset.status;
+      const type = nameEl.dataset.type;
+      const fileName = filePath.split(/[/\\]/).pop();
+
+      if (status === 'deleted') return;
+      if (type === 'untracked') {
+        openFile(absPath, fileName);
+      } else {
+        openDiffView(filePath, absPath, fileName, type === 'staged');
+      }
+      return;
+    }
+
+    // Click en botones de acción (stage/unstage/discard)
+    const btn = e.target.closest('.git-action-btn');
+    if (!btn) return;
+
+    e.stopPropagation();
+    const action = btn.dataset.action;
+    const filePath = btn.dataset.path;
+
+    // Loading state
+    const originalText = btn.textContent;
+    btn.classList.add('git-action-loading');
+    btn.textContent = '⟳';
+    btn.disabled = true;
+
+    if (action === 'stage') {
+      await window.api.gitAdd(state.currentFolder, [filePath]);
+      refreshGitStatus();
+    } else if (action === 'unstage') {
+      await window.api.gitUnstage(state.currentFolder, [filePath]);
+      refreshGitStatus();
+    } else if (action === 'discard') {
+      btn.classList.remove('git-action-loading');
+      btn.textContent = originalText;
+      btn.disabled = false;
+      if (confirm(`Discard changes to ${filePath}?`)) {
+        btn.classList.add('git-action-loading');
+        btn.textContent = '⟳';
+        btn.disabled = true;
+        await window.api.gitDiscard(state.currentFolder, filePath);
+        refreshGitStatus();
+      }
+    }
   });
 }
 
