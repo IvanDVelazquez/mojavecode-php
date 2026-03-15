@@ -2089,3 +2089,13 @@ body {
   white-space: pre-wrap;
   word-break: break-all;
 }
+
+/* ─── MODEL & METHOD HIGHLIGHTS ─── */
+[data-theme="dark"] .model-name-highlight { color: #4EC9B0 !important; font-weight: bold; }
+[data-theme="dark"] .model-method-highlight { color: #3fb950 !important; }
+[data-theme="light"] .model-name-highlight { color: #0E7A6B !important; font-weight: bold; }
+[data-theme="light"] .model-method-highlight { color: #2d8a3e !important; }
+
+/* ─── CONST NAME HIGHLIGHTS ─── */
+[data-theme="dark"] .const-name-highlight { color: #F7A73E !important; font-weight: bold; }
+[data-theme="light"] .const-name-highlight { color: #c88520 !important; font-weight: bold; }

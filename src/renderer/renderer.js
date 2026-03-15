@@ -67,7 +67,8 @@ function initEditor() {
       { token: 'number', foreground: 'F7A73E' },
       { token: 'type', foreground: 'F5A540' },
       { token: 'function', foreground: '2dd4bf' },
-      { token: 'variable', foreground: 'F4E2CE' },
+      { token: 'variable', foreground: 'C792EA' },
+      { token: 'constant', foreground: 'F7A73E', fontStyle: 'bold' },
       { token: 'tag', foreground: '3fb950' },
       { token: 'attribute.name', foreground: '247D9D' },
       { token: 'attribute.value', foreground: 'F1D7BA' },
@@ -101,7 +102,8 @@ function initEditor() {
       { token: 'number', foreground: 'c88520' },
       { token: 'type', foreground: 'E85324' },
       { token: 'function', foreground: '247D9D' },
-      { token: 'variable', foreground: '1F4266' },
+      { token: 'variable', foreground: '7C3AED' },
+      { token: 'constant', foreground: 'c88520', fontStyle: 'bold' },
       { token: 'tag', foreground: '2d8a3e' },
       { token: 'attribute.name', foreground: '247D9D' },
       { token: 'attribute.value', foreground: '1a8a72' },
@@ -154,8 +156,9 @@ function initEditor() {
       `Ln ${e.position.lineNumber}, Col ${e.position.column}`;
   });
 
-  // Escuchar cambios en el contenido → marcar tab como modified + actualizar outline
+  // Escuchar cambios en el contenido → marcar tab como modified + actualizar outline + model highlights
   let outlineTimer = null;
+  let modelHighlightTimer = null;
   state.editor.onDidChangeModelContent(() => {
     if (state.activeTab && !state.activeTab.modified) {
       state.activeTab.modified = true;
@@ -164,6 +167,11 @@ function initEditor() {
     // Debounce outline update
     clearTimeout(outlineTimer);
     outlineTimer = setTimeout(updateOutline, 500);
+    // Debounce model/method highlight
+    if (state.activeTab && state.activeTab.language === 'php') {
+      clearTimeout(modelHighlightTimer);
+      modelHighlightTimer = setTimeout(highlightModelCalls, 300);
+    }
   });
 
   // Keybinding: Ctrl+S → guardar archivo
@@ -184,7 +192,13 @@ function initEditor() {
     () => { if (state.activeTab) closeTab(state.activeTab.path); }
   );
 
-  // Cmd+H: Find & Replace (Monaco built-in, just needs the trigger)
+  // Cmd+F: Find in file (Monaco built-in)
+  state.editor.addCommand(
+    monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyF,
+    () => state.editor.getAction('actions.find').run()
+  );
+
+  // Cmd+H: Find & Replace (Monaco built-in)
   state.editor.addCommand(
     monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyH,
     () => state.editor.getAction('editor.action.startFindReplaceAction').run()
@@ -525,6 +539,8 @@ function activateTab(tab) {
     document.getElementById('status-language').textContent =
       getLanguageDisplayName(tab.language);
     state.editor.focus();
+    // Aplicar highlights de modelos/métodos si es PHP
+    if (tab.language === 'php') setTimeout(highlightModelCalls, 50);
   }
 
   // Highlight en file tree
@@ -1221,6 +1237,61 @@ function extractSymbols(content, language) {
   }
 
   return symbols;
+}
+
+// ─── Model & Method call highlighting ───
+let modelDecorationCollection = null;
+function highlightModelCalls() {
+  if (!state.editor) return;
+  const model = state.editor.getModel();
+  if (!model) return;
+
+  const decorations = [];
+  const text = model.getValue();
+  // Clase::metodo  (static call — PascalCase class name)
+  const staticRe = /\b([A-Z][A-Za-z0-9_]+)\s*::\s*([a-zA-Z_][a-zA-Z0-9_]*)/g;
+  // $var->metodo   (instance call)
+  const instanceRe = /(\$[a-zA-Z_][a-zA-Z0-9_]*)\s*->\s*([a-zA-Z_][a-zA-Z0-9_]*)/g;
+
+  const addMatch = (re) => {
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      const startPos = model.getPositionAt(m.index);
+      const classEnd = model.getPositionAt(m.index + m[1].length);
+      const methodStart = model.getPositionAt(m.index + m[0].lastIndexOf(m[2]));
+      const methodEnd = model.getPositionAt(m.index + m[0].lastIndexOf(m[2]) + m[2].length);
+
+      decorations.push({
+        range: new monaco.Range(startPos.lineNumber, startPos.column, classEnd.lineNumber, classEnd.column),
+        options: { inlineClassName: 'model-name-highlight' },
+      });
+      decorations.push({
+        range: new monaco.Range(methodStart.lineNumber, methodStart.column, methodEnd.lineNumber, methodEnd.column),
+        options: { inlineClassName: 'model-method-highlight' },
+      });
+    }
+  };
+
+  addMatch(staticRe);
+  addMatch(instanceRe);
+
+  // const NOMBRE = ... (class constants y globales)
+  const constRe = /\bconst\s+([A-Z_][A-Z0-9_]*)\b/g;
+  let cm;
+  while ((cm = constRe.exec(text)) !== null) {
+    const nameStart = model.getPositionAt(cm.index + cm[0].indexOf(cm[1]));
+    const nameEnd = model.getPositionAt(cm.index + cm[0].indexOf(cm[1]) + cm[1].length);
+    decorations.push({
+      range: new monaco.Range(nameStart.lineNumber, nameStart.column, nameEnd.lineNumber, nameEnd.column),
+      options: { inlineClassName: 'const-name-highlight' },
+    });
+  }
+
+  if (!modelDecorationCollection) {
+    modelDecorationCollection = state.editor.createDecorationsCollection(decorations);
+  } else {
+    modelDecorationCollection.set(decorations);
+  }
 }
 
 function updateOutline() {
