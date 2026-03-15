@@ -38,7 +38,8 @@
       "node_modules/**/*"
     ],
     "mac": {
-      "target": "dmg"
+      "target": "dmg",
+      "icon": "assets/icon.icns"
     },
     "win": {
       "target": "nsis"

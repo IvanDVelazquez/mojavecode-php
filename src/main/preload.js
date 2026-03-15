@@ -96,6 +96,8 @@ contextBridge.exposeInMainWorld('api', {
   gitLog: (cwd, limit) => ipcRenderer.invoke('git:log', cwd, limit),
   gitDiscard: (cwd, filePath) => ipcRenderer.invoke('git:discard', cwd, filePath),
   gitShow: (cwd, filePath, ref) => ipcRenderer.invoke('git:show', cwd, filePath, ref),
+  gitPush: (cwd) => ipcRenderer.invoke('git:push', cwd),
+  gitPull: (cwd) => ipcRenderer.invoke('git:pull', cwd),
   gitGraphLog: (cwd, limit) => ipcRenderer.invoke('git:graphLog', cwd, limit),
 
   // ── LSP (Language Server Protocol) ──
@@ -105,6 +107,63 @@ contextBridge.exposeInMainWorld('api', {
   lspNotify: (method, params) => ipcRenderer.send('lsp:notify', method, params),
   onLspNotification: (callback) => {
     ipcRenderer.on('lsp:notification', (event, message) => callback(message));
+  },
+
+  // ── PHP Format & PHPUnit ──
+  phpResolvePsr4: (filePath) => ipcRenderer.invoke('php:resolvePsr4', filePath),
+  phpFormat: (filePath) => ipcRenderer.invoke('php:format', filePath),
+  toggleFormatOnSave: (enabled) => ipcRenderer.send('php:toggleFormatOnSave', enabled),
+  onFormatOnSaveChanged: (callback) => {
+    ipcRenderer.on('php:formatOnSaveChanged', (event, enabled) => callback(enabled));
+  },
+  phpunitRun: (args) => ipcRenderer.invoke('phpunit:run', args),
+  onPhpunitRunAll: (callback) => ipcRenderer.on('phpunit:runAll', callback),
+  onPhpunitRunFile: (callback) => ipcRenderer.on('phpunit:runFile', callback),
+  onPhpunitRunMethod: (callback) => ipcRenderer.on('phpunit:runMethod', callback),
+
+  // ── Menu events: DB & Routes ──
+  onMenuDbViewer: (callback) => ipcRenderer.on('menu:db-viewer', callback),
+  onMenuRouteList: (callback) => ipcRenderer.on('menu:route-list', callback),
+
+  // ── Database Viewer ──
+  dbGetConfig: () => ipcRenderer.invoke('db:getConfig'),
+  dbGetTables: () => ipcRenderer.invoke('db:getTables'),
+  dbGetColumns: (table) => ipcRenderer.invoke('db:getColumns', table),
+  dbQuery: (table, column, operator, value, limit) => ipcRenderer.invoke('db:query', table, column, operator, value, limit),
+  dbUpdate: (table, pkCol, pkVal, col, newVal) => ipcRenderer.invoke('db:update', table, pkCol, pkVal, col, newVal),
+
+  // ── Laravel Route List ──
+  laravelRouteList: () => ipcRenderer.invoke('laravel:routeList'),
+
+  // ── Search ──
+  searchInFiles: (rootDir, query, options) => ipcRenderer.invoke('search:inFiles', rootDir, query, options),
+  searchSymbols: (rootDir) => ipcRenderer.invoke('search:symbols', rootDir),
+  onMenuSearch: (callback) => ipcRenderer.on('menu:search', callback),
+  onMenuGoToSymbol: (callback) => ipcRenderer.on('menu:go-to-symbol', callback),
+
+  // ── Composer & Artisan ──
+  composerExec: (subcommand, args) => ipcRenderer.invoke('composer:exec', subcommand, args),
+  artisanExec: (subcommand, args) => ipcRenderer.invoke('artisan:exec', subcommand, args),
+  detectProject: (folderPath) => ipcRenderer.send('project:detect', folderPath),
+  onProjectCapabilities: (callback) => {
+    ipcRenderer.on('project:capabilities', (event, caps) => callback(caps));
+  },
+  // Composer menu events (main → renderer)
+  onComposerRun: (callback) => {
+    ipcRenderer.on('composer:run', (event, cmd) => callback(cmd));
+  },
+  onComposerPrompt: (callback) => {
+    ipcRenderer.on('composer:prompt', (event, cmd) => callback(cmd));
+  },
+  // Artisan menu events (main → renderer)
+  onArtisanRun: (callback) => {
+    ipcRenderer.on('artisan:run', (event, cmd) => callback(cmd));
+  },
+  onArtisanPrompt: (callback) => {
+    ipcRenderer.on('artisan:prompt', (event, cmd) => callback(cmd));
+  },
+  onArtisanTinker: (callback) => {
+    ipcRenderer.on('artisan:tinker', callback);
   },
 
   // ── Utilidades ──

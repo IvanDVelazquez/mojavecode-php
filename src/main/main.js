@@ -7,10 +7,15 @@
  * encarga de:
  *
  * 1. Crear la ventana del browser (BrowserWindow)
- * 2. Manejar el menú nativo del SO
+ * 2. Manejar el menú nativo del SO (dinámico según proyecto)
  * 3. Escuchar mensajes IPC del renderer (frontend)
  * 4. Acceder al filesystem (fs) y procesos del SO (child_process)
  * 5. Spawning de la pseudo-terminal (node-pty) para xterm.js
+ * 6. Detección de proyecto (Composer, Artisan, Pint, PHPUnit, Modules)
+ * 7. Búsqueda de archivos y símbolos en el proyecto
+ * 8. Ejecución de Composer, Artisan, PHPUnit, PHP Formatter
+ * 9. Conexión a base de datos via CLI (mysql/psql)
+ * 10. Resolución de namespaces PSR-4
  *
  * ARQUITECTURA ELECTRON:
  * ┌─────────────┐     IPC      ┌──────────────┐
@@ -45,6 +50,18 @@ const { LspManager } = require('./lsp-manager');
 let mainWindow;
 let ptyProcess;
 let lspManager = null;
+
+// ── Estado de detección de proyecto ──
+let projectCapabilities = {
+  hasComposer: false,
+  hasArtisan: false,
+  hasModules: false, // nwidart/laravel-modules
+  hasPint: false,
+  hasCsFixer: false,
+  hasPhpUnit: false,
+  formatOnSave: false, // desactivado por defecto
+  projectRoot: null,
+};
 
 // ────────────────────────────────────────────
 // 1. VENTANA PRINCIPAL — BrowserWindow con custom titlebar
@@ -83,7 +100,8 @@ function createWindow() {
 
 // ────────────────────────────────────────────
 // 2. MENÚ NATIVO — Barra superior de macOS
-//    File, Edit, View, Terminal, Tema, Help
+//    File, Edit, View, Terminal, Composer*, Artisan*, PHP*, Tema, Help
+//    (* = dinámicos, aparecen solo si se detectan en el proyecto)
 // ────────────────────────────────────────────
 function createMenu() {
   const template = [
@@ -140,6 +158,25 @@ function createMenu() {
           accelerator: 'CmdOrCtrl+`',
           click: () => mainWindow?.webContents.send('menu:toggle-terminal'),
         },
+        {
+          label: 'Search in Files',
+          accelerator: 'CmdOrCtrl+Shift+F',
+          click: () => mainWindow?.webContents.send('menu:search'),
+        },
+        {
+          label: 'Go to Symbol in Project...',
+          accelerator: 'CmdOrCtrl+T',
+          click: () => mainWindow?.webContents.send('menu:go-to-symbol'),
+        },
+        { type: 'separator' },
+        {
+          label: 'Database Viewer',
+          click: () => mainWindow?.webContents.send('menu:db-viewer'),
+        },
+        ...(projectCapabilities.hasArtisan ? [{
+          label: 'Route List',
+          click: () => mainWindow?.webContents.send('menu:route-list'),
+        }] : []),
         { type: 'separator' },
         { role: 'toggleDevTools' },
         { role: 'togglefullscreen' },
@@ -171,6 +208,167 @@ function createMenu() {
         },
       ],
     },
+    // ── Composer Menu (dinámico) ──
+    ...(projectCapabilities.hasComposer ? [{
+      label: 'Composer',
+      submenu: [
+        {
+          label: 'Install',
+          click: () => mainWindow?.webContents.send('composer:run', 'install'),
+        },
+        {
+          label: 'Update',
+          click: () => mainWindow?.webContents.send('composer:run', 'update'),
+        },
+        { type: 'separator' },
+        {
+          label: 'Require Package...',
+          click: () => mainWindow?.webContents.send('composer:prompt', 'require'),
+        },
+        {
+          label: 'Require Dev Package...',
+          click: () => mainWindow?.webContents.send('composer:prompt', 'require --dev'),
+        },
+        {
+          label: 'Remove Package...',
+          click: () => mainWindow?.webContents.send('composer:prompt', 'remove'),
+        },
+        { type: 'separator' },
+        {
+          label: 'Dump Autoload',
+          click: () => mainWindow?.webContents.send('composer:run', 'dump-autoload'),
+        },
+        {
+          label: 'Run Script...',
+          click: () => mainWindow?.webContents.send('composer:prompt', 'run-script'),
+        },
+      ],
+    }] : []),
+    // ── Artisan Menu (dinámico) ──
+    ...(projectCapabilities.hasArtisan ? [{
+      label: 'Artisan',
+      submenu: [
+        {
+          label: 'Make',
+          submenu: [
+            { label: 'Model...', click: () => mainWindow?.webContents.send('artisan:prompt', 'make:model') },
+            { label: 'Controller...', click: () => mainWindow?.webContents.send('artisan:prompt', 'make:controller') },
+            { label: 'Migration...', click: () => mainWindow?.webContents.send('artisan:prompt', 'make:migration') },
+            { label: 'Seeder...', click: () => mainWindow?.webContents.send('artisan:prompt', 'make:seeder') },
+            { label: 'Factory...', click: () => mainWindow?.webContents.send('artisan:prompt', 'make:factory') },
+            { label: 'Middleware...', click: () => mainWindow?.webContents.send('artisan:prompt', 'make:middleware') },
+            { label: 'Request...', click: () => mainWindow?.webContents.send('artisan:prompt', 'make:request') },
+            { label: 'Resource...', click: () => mainWindow?.webContents.send('artisan:prompt', 'make:resource') },
+            { label: 'Event...', click: () => mainWindow?.webContents.send('artisan:prompt', 'make:event') },
+            { label: 'Listener...', click: () => mainWindow?.webContents.send('artisan:prompt', 'make:listener') },
+            { label: 'Job...', click: () => mainWindow?.webContents.send('artisan:prompt', 'make:job') },
+            { label: 'Mail...', click: () => mainWindow?.webContents.send('artisan:prompt', 'make:mail') },
+            { label: 'Notification...', click: () => mainWindow?.webContents.send('artisan:prompt', 'make:notification') },
+            { label: 'Policy...', click: () => mainWindow?.webContents.send('artisan:prompt', 'make:policy') },
+            { label: 'Command...', click: () => mainWindow?.webContents.send('artisan:prompt', 'make:command') },
+            { label: 'Test...', click: () => mainWindow?.webContents.send('artisan:prompt', 'make:test') },
+          ],
+        },
+        { type: 'separator' },
+        {
+          label: 'Migrate',
+          submenu: [
+            { label: 'Run Migrations', click: () => mainWindow?.webContents.send('artisan:run', 'migrate') },
+            { label: 'Rollback', click: () => mainWindow?.webContents.send('artisan:run', 'migrate:rollback') },
+            { label: 'Fresh (Drop & Migrate)', click: () => mainWindow?.webContents.send('artisan:run', 'migrate:fresh') },
+            { label: 'Status', click: () => mainWindow?.webContents.send('artisan:run', 'migrate:status') },
+          ],
+        },
+        {
+          label: 'Cache',
+          submenu: [
+            { label: 'Clear App Cache', click: () => mainWindow?.webContents.send('artisan:run', 'cache:clear') },
+            { label: 'Clear Config Cache', click: () => mainWindow?.webContents.send('artisan:run', 'config:clear') },
+            { label: 'Clear Route Cache', click: () => mainWindow?.webContents.send('artisan:run', 'route:clear') },
+            { label: 'Clear View Cache', click: () => mainWindow?.webContents.send('artisan:run', 'view:clear') },
+            { type: 'separator' },
+            { label: 'Cache Config', click: () => mainWindow?.webContents.send('artisan:run', 'config:cache') },
+            { label: 'Cache Routes', click: () => mainWindow?.webContents.send('artisan:run', 'route:cache') },
+          ],
+        },
+        { type: 'separator' },
+        {
+          label: 'Route List',
+          click: () => mainWindow?.webContents.send('artisan:run', 'route:list'),
+        },
+        {
+          label: 'Tinker',
+          click: () => mainWindow?.webContents.send('artisan:tinker'),
+        },
+        { type: 'separator' },
+        {
+          label: 'Run Custom Command...',
+          click: () => mainWindow?.webContents.send('artisan:prompt', ''),
+        },
+        // ── Laravel Modules submenu ──
+        ...(projectCapabilities.hasModules ? [
+          { type: 'separator' },
+          {
+            label: 'Modules',
+            submenu: [
+              { label: 'List Modules', click: () => mainWindow?.webContents.send('artisan:run', 'module:list') },
+              { type: 'separator' },
+              { label: 'Make Module...', click: () => mainWindow?.webContents.send('artisan:prompt', 'module:make') },
+              { label: 'Make Module Model...', click: () => mainWindow?.webContents.send('artisan:prompt', 'module:make-model') },
+              { label: 'Make Module Controller...', click: () => mainWindow?.webContents.send('artisan:prompt', 'module:make-controller') },
+              { label: 'Make Module Migration...', click: () => mainWindow?.webContents.send('artisan:prompt', 'module:make-migration') },
+              { label: 'Make Module Seeder...', click: () => mainWindow?.webContents.send('artisan:prompt', 'module:make-seeder') },
+              { label: 'Make Module Request...', click: () => mainWindow?.webContents.send('artisan:prompt', 'module:make-request') },
+              { label: 'Make Module Command...', click: () => mainWindow?.webContents.send('artisan:prompt', 'module:make-command') },
+              { label: 'Make Module Event...', click: () => mainWindow?.webContents.send('artisan:prompt', 'module:make-event') },
+              { label: 'Make Module Job...', click: () => mainWindow?.webContents.send('artisan:prompt', 'module:make-job') },
+              { label: 'Make Module Middleware...', click: () => mainWindow?.webContents.send('artisan:prompt', 'module:make-middleware') },
+              { label: 'Make Module Provider...', click: () => mainWindow?.webContents.send('artisan:prompt', 'module:make-provider') },
+              { label: 'Make Module Test...', click: () => mainWindow?.webContents.send('artisan:prompt', 'module:make-test') },
+              { type: 'separator' },
+              { label: 'Module Migrate...', click: () => mainWindow?.webContents.send('artisan:prompt', 'module:migrate') },
+              { label: 'Module Seed...', click: () => mainWindow?.webContents.send('artisan:prompt', 'module:seed') },
+              { label: 'Enable Module...', click: () => mainWindow?.webContents.send('artisan:prompt', 'module:enable') },
+              { label: 'Disable Module...', click: () => mainWindow?.webContents.send('artisan:prompt', 'module:disable') },
+            ],
+          },
+        ] : []),
+      ],
+    }] : []),
+    // ── PHP Menu (format on save + PHPUnit) ──
+    ...((projectCapabilities.hasPint || projectCapabilities.hasCsFixer || projectCapabilities.hasPhpUnit) ? [{
+      label: 'PHP',
+      submenu: [
+        // Format on save toggle
+        ...((projectCapabilities.hasPint || projectCapabilities.hasCsFixer) ? [
+          {
+            label: `Format on Save (${projectCapabilities.hasPint ? 'Pint' : 'CS Fixer'})`,
+            type: 'checkbox',
+            checked: projectCapabilities.formatOnSave,
+            click: (menuItem) => {
+              projectCapabilities.formatOnSave = menuItem.checked;
+              mainWindow?.webContents.send('php:formatOnSaveChanged', menuItem.checked);
+            },
+          },
+          { type: 'separator' },
+        ] : []),
+        // PHPUnit
+        ...(projectCapabilities.hasPhpUnit ? [
+          {
+            label: 'Run All Tests',
+            click: () => mainWindow?.webContents.send('phpunit:runAll'),
+          },
+          {
+            label: 'Run Current File',
+            click: () => mainWindow?.webContents.send('phpunit:runFile'),
+          },
+          {
+            label: 'Run Current Method',
+            click: () => mainWindow?.webContents.send('phpunit:runMethod'),
+          },
+        ] : []),
+      ],
+    }] : []),
     {
       label: 'Help',
       submenu: [
@@ -195,6 +393,65 @@ function createMenu() {
 
   const menu = Menu.buildFromTemplate(template);
   Menu.setApplicationMenu(menu);
+}
+
+// ────────────────────────────────────────────
+// 2b. DETECCIÓN DE PROYECTO — Composer, Artisan, Laravel Modules
+//     Escanea el root del proyecto para habilitar menús dinámicos
+// ────────────────────────────────────────────
+function detectProjectCapabilities(folderPath) {
+  projectCapabilities.projectRoot = folderPath;
+  projectCapabilities.hasComposer = fs.existsSync(path.join(folderPath, 'composer.json'));
+  projectCapabilities.hasArtisan = fs.existsSync(path.join(folderPath, 'artisan'));
+
+  // Detectar nwidart/laravel-modules
+  projectCapabilities.hasModules = false;
+  if (projectCapabilities.hasComposer) {
+    try {
+      const composerJson = JSON.parse(fs.readFileSync(path.join(folderPath, 'composer.json'), 'utf-8'));
+      const allDeps = { ...composerJson.require, ...composerJson['require-dev'] };
+      if (allDeps['nwidart/laravel-modules']) {
+        projectCapabilities.hasModules = true;
+      }
+    } catch { /* ignore parse errors */ }
+  }
+
+  // Detectar PHP formatter (Pint o CS Fixer)
+  projectCapabilities.hasPint = fs.existsSync(path.join(folderPath, 'pint.json'))
+    || fs.existsSync(path.join(folderPath, 'vendor', 'bin', 'pint'));
+  projectCapabilities.hasCsFixer = fs.existsSync(path.join(folderPath, '.php-cs-fixer.php'))
+    || fs.existsSync(path.join(folderPath, '.php-cs-fixer.dist.php'));
+
+  // Detectar PHPUnit
+  projectCapabilities.hasPhpUnit = fs.existsSync(path.join(folderPath, 'phpunit.xml'))
+    || fs.existsSync(path.join(folderPath, 'phpunit.xml.dist'));
+
+  // Reset format on save al cambiar de proyecto
+  projectCapabilities.formatOnSave = false;
+
+  // Rebuild menu con los items detectados
+  createMenu();
+
+  // Notificar al renderer
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('project:capabilities', projectCapabilities);
+  }
+}
+
+/**
+ * Ejecutar un comando del SO (composer, php artisan, etc.)
+ * Devuelve { output, error, code }
+ */
+function runCommand(cmd, args, cwd) {
+  return new Promise((resolve) => {
+    execFile(cmd, args, { cwd, maxBuffer: 1024 * 1024 * 5, timeout: 120000 }, (err, stdout, stderr) => {
+      if (err) {
+        resolve({ output: stdout, error: stderr || err.message, code: err.code });
+      } else {
+        resolve({ output: stdout, error: stderr || null, code: 0 });
+      }
+    });
+  });
 }
 
 // ────────────────────────────────────────────
@@ -567,6 +824,16 @@ ipcMain.handle('git:discard', async (event, cwd, filePath) => {
   return runGit(['checkout', '--', filePath], cwd);
 });
 
+// git push
+ipcMain.handle('git:push', async (event, cwd) => {
+  return runGit(['push'], cwd);
+});
+
+// git pull
+ipcMain.handle('git:pull', async (event, cwd) => {
+  return runGit(['pull'], cwd);
+});
+
 // git graph log — devuelve commits con info de padres, ramas y tags
 ipcMain.handle('git:graphLog', async (event, cwd, limit) => {
   const SEP = '\x01'; // usar separador que no aparece en mensajes
@@ -671,7 +938,621 @@ ipcMain.handle('system:cpuUsage', () => {
 });
 
 // ────────────────────────────────────────────
-// 10. IPC HANDLERS — WINDOW CONTROLS (custom titlebar)
+// 10. IPC HANDLERS — SEARCH IN FILES
+//     Busca texto o regex en todos los archivos del proyecto
+// ────────────────────────────────────────────
+ipcMain.handle('search:inFiles', async (event, rootDir, query, options = {}) => {
+  const { isRegex = false, caseSensitive = false, maxResults = 500 } = options;
+  const results = [];
+  const MAX_DEPTH = 15;
+  const MAX_FILE_SIZE = 1024 * 1024; // 1MB
+  const ignore = new Set(['node_modules', '.git', 'vendor', 'dist', 'build', '.next', '__pycache__', '.idea', '.vscode', 'storage']);
+  const binaryExts = new Set(['png', 'jpg', 'jpeg', 'gif', 'ico', 'svg', 'woff', 'woff2', 'ttf', 'eot', 'mp3', 'mp4', 'zip', 'gz', 'tar', 'pdf', 'exe', 'dll', 'so', 'dylib', 'lock']);
+
+  let regex;
+  try {
+    const flags = caseSensitive ? 'g' : 'gi';
+    regex = isRegex ? new RegExp(query, flags) : new RegExp(escapeRegex(query), flags);
+  } catch (err) {
+    return { error: `Invalid regex: ${err.message}`, results: [] };
+  }
+
+  async function searchDir(dir, depth) {
+    if (depth > MAX_DEPTH || results.length >= maxResults) return;
+    let entries;
+    try {
+      entries = await fs.promises.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (results.length >= maxResults) break;
+      if (entry.name.startsWith('.')) continue;
+
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (!ignore.has(entry.name)) await searchDir(fullPath, depth + 1);
+      } else {
+        const ext = path.extname(entry.name).slice(1).toLowerCase();
+        if (binaryExts.has(ext)) continue;
+
+        try {
+          const stat = await fs.promises.stat(fullPath);
+          if (stat.size > MAX_FILE_SIZE) continue;
+        } catch {
+          continue;
+        }
+
+        let content;
+        try {
+          content = await fs.promises.readFile(fullPath, 'utf-8');
+        } catch {
+          continue;
+        }
+
+        const lines = content.split('\n');
+        for (let i = 0; i < lines.length; i++) {
+          if (results.length >= maxResults) break;
+          regex.lastIndex = 0;
+          if (regex.test(lines[i])) {
+            const relativePath = path.relative(rootDir, fullPath);
+            results.push({
+              file: relativePath,
+              absolutePath: fullPath,
+              line: i + 1,
+              column: lines[i].search(new RegExp(isRegex ? query : escapeRegex(query), caseSensitive ? '' : 'i')) + 1,
+              text: lines[i].trimStart(),
+              lineText: lines[i],
+            });
+          }
+        }
+      }
+    }
+  }
+
+  await searchDir(rootDir, 0);
+  return { results, truncated: results.length >= maxResults };
+});
+
+function escapeRegex(string) {
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// ────────────────────────────────────────────
+// 10b. IPC HANDLER — SEARCH SYMBOLS IN PROJECT
+//      Extrae clases, funciones, métodos, etc. de todos los archivos
+// ────────────────────────────────────────────
+const symbolPatterns = {
+  php: [
+    { regex: /^\s*(?:abstract\s+|final\s+)?class\s+(\w+)/,           kind: 'class' },
+    { regex: /^\s*interface\s+(\w+)/,                                  kind: 'interface' },
+    { regex: /^\s*trait\s+(\w+)/,                                      kind: 'class' },
+    { regex: /^\s*(?:public|protected|private|static|\s)*function\s+(\w+)\s*\(/, kind: 'method' },
+    { regex: /^\s*const\s+(\w+)\s*=/,                                  kind: 'const' },
+  ],
+  javascript: [
+    { regex: /^\s*class\s+(\w+)/,                                      kind: 'class' },
+    { regex: /^\s*(?:export\s+)?(?:async\s+)?function\s+(\w+)/,        kind: 'function' },
+    { regex: /^\s*(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?\(/,    kind: 'function' },
+    { regex: /^\s*(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?function/, kind: 'function' },
+    { regex: /^\s*const\s+([A-Z_][A-Z0-9_]*)\s*=/,                     kind: 'const' },
+  ],
+  typescript: [
+    { regex: /^\s*(?:export\s+)?(?:abstract\s+)?class\s+(\w+)/,        kind: 'class' },
+    { regex: /^\s*(?:export\s+)?interface\s+(\w+)/,                     kind: 'interface' },
+    { regex: /^\s*(?:export\s+)?(?:async\s+)?function\s+(\w+)/,        kind: 'function' },
+    { regex: /^\s*(?:export\s+)?type\s+(\w+)/,                         kind: 'interface' },
+  ],
+  python: [
+    { regex: /^\s*class\s+(\w+)/,                                      kind: 'class' },
+    { regex: /^\s*(?:async\s+)?def\s+(\w+)/,                           kind: 'function' },
+  ],
+  java: [
+    { regex: /^\s*(?:public|private|protected)?\s*(?:abstract\s+)?class\s+(\w+)/, kind: 'class' },
+    { regex: /^\s*(?:public|private|protected)?\s*interface\s+(\w+)/,  kind: 'interface' },
+    { regex: /^\s*(?:public|private|protected|static|\s)*\w+\s+(\w+)\s*\(/, kind: 'method' },
+  ],
+  go: [
+    { regex: /^type\s+(\w+)\s+struct/,                                  kind: 'class' },
+    { regex: /^type\s+(\w+)\s+interface/,                               kind: 'interface' },
+    { regex: /^func\s+(?:\(\w+\s+\*?\w+\)\s+)?(\w+)\s*\(/,            kind: 'function' },
+  ],
+  ruby: [
+    { regex: /^\s*class\s+(\w+)/,                                      kind: 'class' },
+    { regex: /^\s*module\s+(\w+)/,                                     kind: 'class' },
+    { regex: /^\s*def\s+(\w+)/,                                        kind: 'method' },
+  ],
+  rust: [
+    { regex: /^\s*(?:pub\s+)?struct\s+(\w+)/,                          kind: 'class' },
+    { regex: /^\s*(?:pub\s+)?trait\s+(\w+)/,                           kind: 'interface' },
+    { regex: /^\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)/,                 kind: 'function' },
+    { regex: /^\s*impl\s+(\w+)/,                                       kind: 'class' },
+  ],
+};
+
+const langExtMap = {
+  php: 'php', js: 'javascript', jsx: 'javascript', mjs: 'javascript',
+  ts: 'typescript', tsx: 'typescript',
+  py: 'python', java: 'java', go: 'go', rb: 'ruby', rs: 'rust',
+};
+
+const falsePositives = new Set(['if', 'for', 'while', 'switch', 'catch', 'return', 'new', 'else', 'try', 'do', 'throw']);
+
+ipcMain.handle('search:symbols', async (event, rootDir) => {
+  const symbols = [];
+  const MAX_DEPTH = 15;
+  const MAX_FILES = 5000;
+  const MAX_FILE_SIZE = 512 * 1024; // 512KB
+  const ignore = new Set(['node_modules', '.git', 'vendor', 'dist', 'build', '.next', '__pycache__', '.idea', '.vscode', 'storage']);
+  let fileCount = 0;
+
+  async function walkDir(dir, depth) {
+    if (depth > MAX_DEPTH || fileCount >= MAX_FILES) return;
+    let entries;
+    try {
+      entries = await fs.promises.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (fileCount >= MAX_FILES) break;
+      if (entry.name.startsWith('.')) continue;
+      const fullPath = path.join(dir, entry.name);
+
+      if (entry.isDirectory()) {
+        if (!ignore.has(entry.name)) await walkDir(fullPath, depth + 1);
+      } else {
+        const ext = path.extname(entry.name).slice(1).toLowerCase();
+        const lang = langExtMap[ext];
+        if (!lang) continue; // Solo lenguajes con patrones definidos
+
+        const patterns = symbolPatterns[lang];
+        if (!patterns) continue;
+
+        fileCount++;
+
+        try {
+          const stat = await fs.promises.stat(fullPath);
+          if (stat.size > MAX_FILE_SIZE) continue;
+        } catch { continue; }
+
+        let content;
+        try {
+          content = await fs.promises.readFile(fullPath, 'utf-8');
+        } catch { continue; }
+
+        const relativePath = path.relative(rootDir, fullPath);
+        const lines = content.split('\n');
+
+        for (let i = 0; i < lines.length; i++) {
+          for (const { regex, kind } of patterns) {
+            const match = lines[i].match(regex);
+            if (match) {
+              const name = match[1];
+              if (!name || falsePositives.has(name)) continue;
+              symbols.push({
+                name,
+                kind,
+                file: relativePath,
+                absolutePath: fullPath,
+                line: i + 1,
+              });
+              break;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  await walkDir(rootDir, 0);
+  return { symbols };
+});
+
+// ────────────────────────────────────────────
+// 11. IPC HANDLERS — PHP FORMAT ON SAVE & PHPUNIT
+// ────────────────────────────────────────────
+
+// Formatear un archivo PHP con Pint o CS Fixer
+ipcMain.handle('php:format', async (event, filePath) => {
+  if (!projectCapabilities.projectRoot) return { error: 'No project open' };
+
+  const root = projectCapabilities.projectRoot;
+  if (projectCapabilities.hasPint) {
+    const pintBin = path.join(root, 'vendor', 'bin', 'pint');
+    return runCommand(pintBin, [filePath, '--no-interaction'], root);
+  } else if (projectCapabilities.hasCsFixer) {
+    const fixerBin = path.join(root, 'vendor', 'bin', 'php-cs-fixer');
+    return runCommand(fixerBin, ['fix', filePath, '--no-interaction', '--quiet'], root);
+  }
+  return { error: 'No PHP formatter found' };
+});
+
+// Toggle format on save
+ipcMain.on('php:toggleFormatOnSave', (event, enabled) => {
+  projectCapabilities.formatOnSave = enabled;
+  createMenu(); // Rebuild para actualizar el checkbox del menú
+});
+
+// Ejecutar PHPUnit
+ipcMain.handle('phpunit:run', async (event, args) => {
+  if (!projectCapabilities.projectRoot) return { error: 'No project open' };
+  const root = projectCapabilities.projectRoot;
+  const phpunitBin = path.join(root, 'vendor', 'bin', 'phpunit');
+  const cmdArgs = [...(args || []), '--colors=always'];
+  return runCommand(phpunitBin, cmdArgs, root);
+});
+
+// ────────────────────────────────────────────
+// 12. IPC HANDLERS — DATABASE VIEWER
+//      Parsea .env, conecta via CLI de mysql/psql, muestra schema
+// ────────────────────────────────────────────
+
+function parseEnvFile(folderPath) {
+  const envPath = path.join(folderPath, '.env');
+  if (!fs.existsSync(envPath)) return null;
+  try {
+    const content = fs.readFileSync(envPath, 'utf-8');
+    const vars = {};
+    for (const line of content.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const eqIndex = trimmed.indexOf('=');
+      if (eqIndex === -1) continue;
+      const key = trimmed.substring(0, eqIndex).trim();
+      let val = trimmed.substring(eqIndex + 1).trim();
+      // Quitar comillas
+      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+        val = val.slice(1, -1);
+      }
+      vars[key] = val;
+    }
+    return vars;
+  } catch {
+    return null;
+  }
+}
+
+ipcMain.handle('db:getConfig', async (event) => {
+  if (!projectCapabilities.projectRoot) return { error: 'No project open' };
+  const env = parseEnvFile(projectCapabilities.projectRoot);
+  if (!env) return { error: '.env file not found' };
+
+  return {
+    connection: env.DB_CONNECTION || 'mysql',
+    host: env.DB_HOST || '127.0.0.1',
+    port: env.DB_PORT || (env.DB_CONNECTION === 'pgsql' ? '5432' : '3306'),
+    database: env.DB_DATABASE || '',
+    username: env.DB_USERNAME || '',
+    password: env.DB_PASSWORD || '',
+  };
+});
+
+ipcMain.handle('db:getTables', async (event) => {
+  if (!projectCapabilities.projectRoot) return { error: 'No project open' };
+  const env = parseEnvFile(projectCapabilities.projectRoot);
+  if (!env) return { error: '.env file not found' };
+
+  const conn = env.DB_CONNECTION || 'mysql';
+  const host = env.DB_HOST || '127.0.0.1';
+  const port = env.DB_PORT || (conn === 'pgsql' ? '5432' : '3306');
+  const db = env.DB_DATABASE || '';
+  const user = env.DB_USERNAME || '';
+  const pass = env.DB_PASSWORD || '';
+
+  if (conn === 'pgsql') {
+    // PostgreSQL
+    const pgEnv = { ...process.env, PGPASSWORD: pass };
+    return new Promise((resolve) => {
+      execFile('psql', ['-h', host, '-p', port, '-U', user, '-d', db, '-t', '-A', '-c',
+        "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename"],
+        { env: pgEnv, timeout: 10000 }, (err, stdout, stderr) => {
+          if (err) return resolve({ error: stderr || err.message });
+          const tables = stdout.trim().split('\n').filter(Boolean);
+          resolve({ tables });
+        });
+    });
+  } else {
+    // MySQL (default)
+    const args = ['-h', host, '-P', port, '-u', user, db, '-N', '-e', 'SHOW TABLES'];
+    if (pass) args.splice(4, 0, `-p${pass}`);
+    return new Promise((resolve) => {
+      execFile('mysql', args, { timeout: 10000 }, (err, stdout, stderr) => {
+        if (err) return resolve({ error: stderr || err.message });
+        const tables = stdout.trim().split('\n').filter(Boolean);
+        resolve({ tables });
+      });
+    });
+  }
+});
+
+ipcMain.handle('db:getColumns', async (event, tableName) => {
+  if (!projectCapabilities.projectRoot) return { error: 'No project open' };
+  const env = parseEnvFile(projectCapabilities.projectRoot);
+  if (!env) return { error: '.env file not found' };
+
+  const conn = env.DB_CONNECTION || 'mysql';
+  const host = env.DB_HOST || '127.0.0.1';
+  const port = env.DB_PORT || (conn === 'pgsql' ? '5432' : '3306');
+  const db = env.DB_DATABASE || '';
+  const user = env.DB_USERNAME || '';
+  const pass = env.DB_PASSWORD || '';
+
+  if (conn === 'pgsql') {
+    const pgEnv = { ...process.env, PGPASSWORD: pass };
+    return new Promise((resolve) => {
+      execFile('psql', ['-h', host, '-p', port, '-U', user, '-d', db, '-t', '-A', '-c',
+        `SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_name = '${tableName.replace(/'/g, "''")}' ORDER BY ordinal_position`],
+        { env: pgEnv, timeout: 10000 }, (err, stdout, stderr) => {
+          if (err) return resolve({ error: stderr || err.message });
+          const columns = stdout.trim().split('\n').filter(Boolean).map((line) => {
+            const [name, type, nullable, defaultVal] = line.split('|');
+            return { name, type, nullable: nullable === 'YES', default: defaultVal || null };
+          });
+          resolve({ columns });
+        });
+    });
+  } else {
+    const args = ['-h', host, '-P', port, '-u', user, db, '-N', '-e',
+      `SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_KEY, COLUMN_DEFAULT FROM information_schema.columns WHERE TABLE_SCHEMA = '${db.replace(/'/g, "''")}' AND TABLE_NAME = '${tableName.replace(/'/g, "''")}' ORDER BY ORDINAL_POSITION`];
+    if (pass) args.splice(4, 0, `-p${pass}`);
+    return new Promise((resolve) => {
+      execFile('mysql', args, { timeout: 10000 }, (err, stdout, stderr) => {
+        if (err) return resolve({ error: stderr || err.message });
+        const columns = stdout.trim().split('\n').filter(Boolean).map((line) => {
+          const [name, type, nullable, key, defaultVal] = line.split('\t');
+          return { name, type, nullable: nullable === 'YES', key: key || null, default: defaultVal || null };
+        });
+        resolve({ columns });
+      });
+    });
+  }
+});
+
+ipcMain.handle('db:query', async (event, tableName, column, operator, value, limit) => {
+  if (!projectCapabilities.projectRoot) return { error: 'No project open' };
+  const env = parseEnvFile(projectCapabilities.projectRoot);
+  if (!env) return { error: '.env file not found' };
+
+  const conn = env.DB_CONNECTION || 'mysql';
+  const host = env.DB_HOST || '127.0.0.1';
+  const port = env.DB_PORT || (conn === 'pgsql' ? '5432' : '3306');
+  const db = env.DB_DATABASE || '';
+  const user = env.DB_USERNAME || '';
+  const pass = env.DB_PASSWORD || '';
+  const safeLimit = Math.min(parseInt(limit) || 50, 200);
+
+  // Sanitizar: solo permitir nombres alfanuméricos y underscore
+  const safeTable = tableName.replace(/[^a-zA-Z0-9_]/g, '');
+  const safeColumn = column.replace(/[^a-zA-Z0-9_]/g, '');
+  const allowedOps = ['=', '!=', '>', '<', '>=', '<=', 'LIKE', 'NOT LIKE', 'IS NULL', 'IS NOT NULL'];
+  const safeOp = allowedOps.includes(operator) ? operator : '=';
+
+  let whereClause = '';
+  if (safeColumn && safeOp) {
+    if (safeOp === 'IS NULL' || safeOp === 'IS NOT NULL') {
+      whereClause = `WHERE \`${safeColumn}\` ${safeOp}`;
+    } else if (safeOp === 'LIKE' || safeOp === 'NOT LIKE') {
+      const safeVal = value.replace(/'/g, "''");
+      whereClause = `WHERE \`${safeColumn}\` ${safeOp} '%${safeVal}%'`;
+    } else {
+      const safeVal = value.replace(/'/g, "''");
+      whereClause = `WHERE \`${safeColumn}\` ${safeOp} '${safeVal}'`;
+    }
+  }
+
+  const sql = `SELECT * FROM \`${safeTable}\` ${whereClause} LIMIT ${safeLimit}`;
+
+  if (conn === 'pgsql') {
+    // PostgreSQL: backticks → double quotes
+    const pgSql = sql.replace(/`/g, '"');
+    const pgEnv = { ...process.env, PGPASSWORD: pass };
+    return new Promise((resolve) => {
+      execFile('psql', ['-h', host, '-p', port, '-U', user, '-d', db, '-c', pgSql, '--csv'],
+        { env: pgEnv, timeout: 15000 }, (err, stdout, stderr) => {
+          if (err) return resolve({ error: stderr || err.message, sql: pgSql });
+          const lines = stdout.trim().split('\n');
+          if (lines.length < 1) return resolve({ columns: [], rows: [], sql: pgSql });
+          const headers = parseCsvLine(lines[0]);
+          const rows = lines.slice(1).map((line) => parseCsvLine(line));
+          resolve({ columns: headers, rows, sql: pgSql });
+        });
+    });
+  } else {
+    // MySQL
+    const args = ['-h', host, '-P', port, '-u', user, db, '-e', sql, '--batch'];
+    if (pass) args.splice(4, 0, `-p${pass}`);
+    return new Promise((resolve) => {
+      execFile('mysql', args, { timeout: 15000 }, (err, stdout, stderr) => {
+        if (err) return resolve({ error: stderr || err.message, sql });
+        const lines = stdout.trim().split('\n');
+        if (lines.length < 1) return resolve({ columns: [], rows: [], sql });
+        const headers = lines[0].split('\t');
+        const rows = lines.slice(1).map((line) => line.split('\t'));
+        resolve({ columns: headers, rows, sql });
+      });
+    });
+  }
+});
+
+ipcMain.handle('db:update', async (event, tableName, pkColumn, pkValue, column, newValue) => {
+  if (!projectCapabilities.projectRoot) return { error: 'No project open' };
+  const env = parseEnvFile(projectCapabilities.projectRoot);
+  if (!env) return { error: '.env file not found' };
+
+  const conn = env.DB_CONNECTION || 'mysql';
+  const host = env.DB_HOST || '127.0.0.1';
+  const port = env.DB_PORT || (conn === 'pgsql' ? '5432' : '3306');
+  const db = env.DB_DATABASE || '';
+  const user = env.DB_USERNAME || '';
+  const pass = env.DB_PASSWORD || '';
+
+  const safeTable = tableName.replace(/[^a-zA-Z0-9_]/g, '');
+  const safePkCol = pkColumn.replace(/[^a-zA-Z0-9_]/g, '');
+  const safeCol = column.replace(/[^a-zA-Z0-9_]/g, '');
+  const safePkVal = String(pkValue).replace(/'/g, "''");
+
+  let setClause;
+  if (newValue === null) {
+    setClause = `\`${safeCol}\` = NULL`;
+  } else {
+    const safeNewVal = String(newValue).replace(/'/g, "''");
+    setClause = `\`${safeCol}\` = '${safeNewVal}'`;
+  }
+
+  const sql = `UPDATE \`${safeTable}\` SET ${setClause} WHERE \`${safePkCol}\` = '${safePkVal}' LIMIT 1`;
+
+  if (conn === 'pgsql') {
+    const pgSql = sql.replace(/`/g, '"').replace(/ LIMIT 1/, '');
+    const pgEnv = { ...process.env, PGPASSWORD: pass };
+    return new Promise((resolve) => {
+      execFile('psql', ['-h', host, '-p', port, '-U', user, '-d', db, '-c', pgSql],
+        { env: pgEnv, timeout: 10000 }, (err, stdout, stderr) => {
+          if (err) return resolve({ error: stderr || err.message, sql: pgSql });
+          resolve({ success: true, sql: pgSql });
+        });
+    });
+  } else {
+    const args = ['-h', host, '-P', port, '-u', user, db, '-e', sql];
+    if (pass) args.splice(4, 0, `-p${pass}`);
+    return new Promise((resolve) => {
+      execFile('mysql', args, { timeout: 10000 }, (err, stdout, stderr) => {
+        if (err) return resolve({ error: stderr || err.message, sql });
+        resolve({ success: true, sql });
+      });
+    });
+  }
+});
+
+// Parsear una línea CSV simple (para psql --csv)
+function parseCsvLine(line) {
+  const result = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"' && line[i + 1] === '"') { current += '"'; i++; }
+      else if (ch === '"') { inQuotes = false; }
+      else { current += ch; }
+    } else {
+      if (ch === '"') { inQuotes = true; }
+      else if (ch === ',') { result.push(current); current = ''; }
+      else { current += ch; }
+    }
+  }
+  result.push(current);
+  return result;
+}
+
+// ────────────────────────────────────────────
+// 13. IPC HANDLER — PSR-4 NAMESPACE RESOLVER
+// ────────────────────────────────────────────
+ipcMain.handle('php:resolvePsr4', async (event, filePath) => {
+  if (!projectCapabilities.projectRoot || !projectCapabilities.hasComposer) {
+    return { namespace: null };
+  }
+
+  const root = projectCapabilities.projectRoot;
+  let composerJson;
+  try {
+    composerJson = JSON.parse(fs.readFileSync(path.join(root, 'composer.json'), 'utf-8'));
+  } catch {
+    return { namespace: null };
+  }
+
+  // Recopilar todos los mappings PSR-4 (autoload + autoload-dev)
+  const psr4 = {
+    ...(composerJson.autoload?.['psr-4'] || {}),
+    ...(composerJson['autoload-dev']?.['psr-4'] || {}),
+  };
+
+  // Normalizar el path del archivo relativo al root
+  const relativePath = path.relative(root, filePath).replace(/\\/g, '/');
+  const fileName = path.basename(filePath, '.php');
+
+  // Buscar el mapping PSR-4 que matchea
+  let bestMatch = null;
+  let bestLen = 0;
+
+  for (const [nsPrefix, dirPath] of Object.entries(psr4)) {
+    // dirPath puede ser string o array
+    const dirs = Array.isArray(dirPath) ? dirPath : [dirPath];
+    for (const dir of dirs) {
+      const normalizedDir = dir.replace(/\\/g, '/').replace(/\/$/, '') + '/';
+      if (relativePath.startsWith(normalizedDir) && normalizedDir.length > bestLen) {
+        bestMatch = { nsPrefix: nsPrefix.replace(/\\$/, ''), dir: normalizedDir };
+        bestLen = normalizedDir.length;
+      }
+    }
+  }
+
+  if (!bestMatch) return { namespace: null, className: fileName };
+
+  // Calcular el namespace: prefijo + subdirectorios
+  const subPath = relativePath.slice(bestMatch.dir.length);
+  const parts = subPath.split('/');
+  parts.pop(); // quitar el nombre del archivo
+
+  const namespace = parts.length > 0
+    ? bestMatch.nsPrefix + '\\' + parts.join('\\')
+    : bestMatch.nsPrefix;
+
+  return { namespace, className: fileName };
+});
+
+// ────────────────────────────────────────────
+// 14. IPC HANDLERS — LARAVEL ROUTE LIST
+// ────────────────────────────────────────────
+ipcMain.handle('laravel:routeList', async (event) => {
+  if (!projectCapabilities.projectRoot || !projectCapabilities.hasArtisan) {
+    return { error: 'Not a Laravel project' };
+  }
+  return runCommand('php', ['artisan', 'route:list', '--json', '--no-interaction'], projectCapabilities.projectRoot);
+});
+
+// ────────────────────────────────────────────
+// 15. IPC HANDLERS — COMPOSER & ARTISAN
+//     Ejecuta comandos de Composer y Artisan en el proyecto
+// ────────────────────────────────────────────
+
+// Detectar capabilities cuando se abre una carpeta
+ipcMain.on('project:detect', (event, folderPath) => {
+  detectProjectCapabilities(folderPath);
+});
+
+// Ejecutar comando de Composer
+ipcMain.handle('composer:exec', async (event, subcommand, args) => {
+  if (!projectCapabilities.projectRoot) return { error: 'No project open' };
+  const cmdArgs = [subcommand, ...(args ? args.split(/\s+/) : [])];
+  // Agregar --no-interaction para evitar prompts
+  if (!cmdArgs.includes('--no-interaction') && !cmdArgs.includes('-n')) {
+    cmdArgs.push('--no-interaction');
+  }
+  // Agregar --ansi para colores
+  if (!cmdArgs.includes('--ansi') && !cmdArgs.includes('--no-ansi')) {
+    cmdArgs.push('--ansi');
+  }
+  return runCommand('composer', cmdArgs, projectCapabilities.projectRoot);
+});
+
+// Ejecutar comando de Artisan
+ipcMain.handle('artisan:exec', async (event, subcommand, args) => {
+  if (!projectCapabilities.projectRoot) return { error: 'No project open' };
+  const cmdArgs = ['artisan', subcommand, ...(args ? args.split(/\s+/) : [])];
+  // Agregar --no-interaction para evitar prompts
+  if (!cmdArgs.includes('--no-interaction') && !cmdArgs.includes('-n')) {
+    cmdArgs.push('--no-interaction');
+  }
+  // Agregar --ansi para colores
+  if (!cmdArgs.includes('--ansi') && !cmdArgs.includes('--no-ansi')) {
+    cmdArgs.push('--ansi');
+  }
+  return runCommand('php', cmdArgs, projectCapabilities.projectRoot);
+});
+
+// ────────────────────────────────────────────
+// 16. IPC HANDLERS — WINDOW CONTROLS (custom titlebar)
 //     Minimize, maximize/restore, close
 // ────────────────────────────────────────────
 ipcMain.on('window:minimize', () => mainWindow?.minimize());
@@ -685,7 +1566,7 @@ ipcMain.on('window:maximize', () => {
 ipcMain.on('window:close', () => mainWindow?.close());
 
 // ────────────────────────────────────────────
-// 11. APP LIFECYCLE — Inicio, activación y cierre de Electron
+// 17. APP LIFECYCLE — Inicio, activación y cierre de Electron
 //     whenReady → crea menú y ventana; gestiona quit y cleanup
 // ────────────────────────────────────────────
 // app.whenReady() se resuelve cuando Electron terminó de inicializar

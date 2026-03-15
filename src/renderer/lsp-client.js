@@ -484,15 +484,42 @@ function initBladeCompletions() {
     { label: '@error', insertText: "@error('${1:field}')\n\t$0\n@enderror", doc: 'Validation error block' },
     { label: '@old', insertText: "@old('${1:field}')", doc: 'Old form value' },
 
+    // HTML Attributes (Laravel 9+)
+    { label: '@class', insertText: "@class([${1:'class' => condition}])", doc: 'Conditional CSS classes' },
+    { label: '@style', insertText: "@style([${1:'color: red' => condition}])", doc: 'Conditional inline styles' },
+    { label: '@checked', insertText: '@checked(${1:condition})', doc: 'Checked attribute if true' },
+    { label: '@selected', insertText: '@selected(${1:condition})', doc: 'Selected attribute if true' },
+    { label: '@disabled', insertText: '@disabled(${1:condition})', doc: 'Disabled attribute if true' },
+    { label: '@readonly', insertText: '@readonly(${1:condition})', doc: 'Readonly attribute if true' },
+    { label: '@required', insertText: '@required(${1:condition})', doc: 'Required attribute if true' },
+
+    // Livewire
+    { label: '@livewire', insertText: "@livewire('${1:component}')", doc: 'Render Livewire component' },
+    { label: '@livewireStyles', insertText: '@livewireStyles', doc: 'Livewire CSS assets' },
+    { label: '@livewireScripts', insertText: '@livewireScripts', doc: 'Livewire JS assets' },
+
+    // Components (modern syntax)
+    { label: '@aware', insertText: "@aware(['${1:prop}'])", doc: 'Access parent component data' },
+    { label: '@teleport', insertText: "@teleport('${1:selector}')\n\t$0\n@endteleport", doc: 'Teleport content to selector' },
+    { label: '@fragment', insertText: "@fragment('${1:name}')\n\t$0\n@endfragment", doc: 'Define a fragment' },
+    { label: '@persist', insertText: "@persist('${1:name}')\n\t$0\n@endpersist", doc: 'Persist across navigations' },
+
+    // Session & Errors
+    { label: '@session', insertText: "@session('${1:key}')\n\t$0\n@endsession", doc: 'Session data block' },
+
     // Other
     { label: '@php', insertText: '@php\n\t$0\n@endphp', doc: 'Raw PHP block' },
     { label: '@json', insertText: '@json(${1:\\$data})', doc: 'Output as JSON' },
+    { label: '@js', insertText: '@js(${1:\\$data})', doc: 'Output as JavaScript' },
     { label: '@dd', insertText: '@dd(${1:\\$variable})', doc: 'Dump and die' },
     { label: '@dump', insertText: '@dump(${1:\\$variable})', doc: 'Dump variable' },
     { label: '@env', insertText: "@env('${1:production}')\n\t$0\n@endenv", doc: 'Environment check' },
     { label: '@production', insertText: '@production\n\t$0\n@endproduction', doc: 'Production environment check' },
     { label: '@once', insertText: '@once\n\t$0\n@endonce', doc: 'Render content only once' },
     { label: '@vite', insertText: "@vite('${1:resources/css/app.css}')", doc: 'Vite asset' },
+    { label: '@viteReactRefresh', insertText: '@viteReactRefresh', doc: 'Vite React refresh' },
+    { label: '@lang', insertText: "@lang('${1:messages.key}')", doc: 'Localization string' },
+    { label: '@choice', insertText: "@choice('${1:messages.key}', ${2:\\$count})", doc: 'Pluralized localization' },
   ];
 
   monaco.languages.registerCompletionItemProvider('php', {
@@ -575,6 +602,164 @@ async function stopLsp() {
   await window.api.lspStop();
 }
 
+// ┌──────────────────────────────────────────────────┐
+// │  PHP SMART SNIPPETS — Contextuales por posición  │
+// └──────────────────────────────────────────────────┘
+function initPhpSmartSnippets() {
+  const snippets = [
+    // Métodos (dentro de una clase)
+    {
+      label: 'fn',
+      detail: 'Public method',
+      insertText: 'public function ${1:methodName}(${2}): ${3:void}\n{\n\t$0\n}',
+      context: 'class',
+    },
+    {
+      label: 'fnp',
+      detail: 'Private method',
+      insertText: 'private function ${1:methodName}(${2}): ${3:void}\n{\n\t$0\n}',
+      context: 'class',
+    },
+    {
+      label: 'fnr',
+      detail: 'Protected method',
+      insertText: 'protected function ${1:methodName}(${2}): ${3:void}\n{\n\t$0\n}',
+      context: 'class',
+    },
+    {
+      label: 'fns',
+      detail: 'Public static method',
+      insertText: 'public static function ${1:methodName}(${2}): ${3:void}\n{\n\t$0\n}',
+      context: 'class',
+    },
+    {
+      label: '__construct',
+      detail: 'Constructor',
+      insertText: 'public function __construct(\n\t${1}\n) {\n\t$0\n}',
+      context: 'class',
+    },
+    {
+      label: 'cpr',
+      detail: 'Constructor with promoted properties',
+      insertText: 'public function __construct(\n\tprivate readonly ${1:string} \\$${2:property},\n) {\n\t$0\n}',
+      context: 'class',
+    },
+    {
+      label: 'prop',
+      detail: 'Property declaration',
+      insertText: '${1|public,private,protected|} ${2:string} \\$${3:property};',
+      context: 'class',
+    },
+    {
+      label: 'propr',
+      detail: 'Readonly property',
+      insertText: '${1|public,private,protected|} readonly ${2:string} \\$${3:property};',
+      context: 'class',
+    },
+    // Funciones (fuera de clase)
+    {
+      label: 'fn',
+      detail: 'Function',
+      insertText: 'function ${1:functionName}(${2}): ${3:void}\n{\n\t$0\n}',
+      context: 'global',
+    },
+    // Estructuras generales
+    {
+      label: 'class',
+      detail: 'Class definition',
+      insertText: 'class ${1:ClassName}\n{\n\t$0\n}',
+      context: 'global',
+    },
+    {
+      label: 'interface',
+      detail: 'Interface definition',
+      insertText: 'interface ${1:InterfaceName}\n{\n\t$0\n}',
+      context: 'global',
+    },
+    {
+      label: 'trait',
+      detail: 'Trait definition',
+      insertText: 'trait ${1:TraitName}\n{\n\t$0\n}',
+      context: 'global',
+    },
+    {
+      label: 'enum',
+      detail: 'Enum definition (PHP 8.1+)',
+      insertText: 'enum ${1:EnumName}${2:: string}\n{\n\tcase ${3:Value} = ${4:\'value\'};\n}',
+      context: 'global',
+    },
+    {
+      label: 'test',
+      detail: 'PHPUnit test method',
+      insertText: 'public function test_${1:it_does_something}(): void\n{\n\t$0\n}',
+      context: 'class',
+    },
+    {
+      label: 'testa',
+      detail: 'PHPUnit test method with @test',
+      insertText: '/** @test */\npublic function ${1:it_does_something}(): void\n{\n\t$0\n}',
+      context: 'class',
+    },
+  ];
+
+  /**
+   * Detectar si el cursor está dentro de una clase/trait/interface.
+   * Recorre las líneas hacia arriba buscando class/trait/interface,
+   * contando llaves para determinar si estamos adentro.
+   */
+  function detectContext(model, position) {
+    let braceDepth = 0;
+    for (let i = position.lineNumber - 1; i >= 1; i--) {
+      const line = model.getLineContent(i);
+      for (let j = line.length - 1; j >= 0; j--) {
+        if (line[j] === '}') braceDepth++;
+        if (line[j] === '{') braceDepth--;
+      }
+      if (braceDepth < 0) {
+        // Estamos dentro de un bloque — verificar si es clase
+        if (line.match(/^\s*(?:abstract\s+|final\s+)?(?:class|trait|interface|enum)\s+\w+/)) {
+          return 'class';
+        }
+      }
+    }
+    return 'global';
+  }
+
+  monaco.languages.registerCompletionItemProvider('php', {
+    provideCompletionItems(model, position) {
+      // No ofrecer en archivos .blade.php
+      if (model.uri.path.includes('.blade.php')) {
+        return { suggestions: [] };
+      }
+
+      const word = model.getWordUntilPosition(position);
+      const range = {
+        startLineNumber: position.lineNumber,
+        startColumn: word.startColumn,
+        endLineNumber: position.lineNumber,
+        endColumn: word.endColumn,
+      };
+
+      const context = detectContext(model, position);
+
+      return {
+        suggestions: snippets
+          .filter((s) => s.context === context)
+          .map((s) => ({
+            label: s.label,
+            kind: monaco.languages.CompletionItemKind.Snippet,
+            insertText: s.insertText,
+            insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+            detail: s.detail,
+            range,
+            sortText: '0' + s.label, // Priorizar sobre otros
+          })),
+      };
+    },
+  });
+}
+
 // Registrar los providers de Monaco una sola vez
 initLspProviders();
 initBladeCompletions();
+initPhpSmartSnippets();
