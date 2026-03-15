@@ -34,6 +34,8 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { execFile } = require('child_process');
+const config = require('../config');
+const db = require('./db-helper');
 
 // node-pty: pseudo-terminal para la terminal integrada
 // Se importa con try/catch porque es un native module que
@@ -69,14 +71,13 @@ let projectCapabilities = {
 // ────────────────────────────────────────────
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1400,
-    height: 900,
-    minWidth: 800,
-    minHeight: 600,
-    // Sacamos el frame nativo para tener custom titlebar
+    width: config.window.width,
+    height: config.window.height,
+    minWidth: config.window.minWidth,
+    minHeight: config.window.minHeight,
     frame: false,
     titleBarStyle: 'hidden',
-    backgroundColor: '#0d1a2a',
+    backgroundColor: config.window.bg,
     icon: path.join(__dirname, '../../assets/icon.png'),
     webPreferences: {
       // preload.js actúa como puente seguro entre main y renderer
@@ -444,7 +445,7 @@ function detectProjectCapabilities(folderPath) {
  */
 function runCommand(cmd, args, cwd) {
   return new Promise((resolve) => {
-    execFile(cmd, args, { cwd, maxBuffer: 1024 * 1024 * 5, timeout: 120000 }, (err, stdout, stderr) => {
+    execFile(cmd, args, { cwd, maxBuffer: config.exec.maxBuffer, timeout: config.exec.timeout }, (err, stdout, stderr) => {
       if (err) {
         resolve({ output: stdout, error: stderr || err.message, code: err.code });
       } else {
@@ -495,9 +496,8 @@ ipcMain.handle('fs:readDir', async (event, dirPath) => {
  */
 ipcMain.handle('fs:listAllFiles', async (event, rootDir) => {
   const results = [];
-  const MAX_FILES = 5000;
-  const MAX_DEPTH = 15;
-  const ignore = new Set(['node_modules', '.git', 'vendor', 'dist', 'build', '.next', '__pycache__']);
+  const MAX_FILES = config.search.maxFiles;
+  const MAX_DEPTH = config.search.maxDepth;
 
   async function walk(dir, depth) {
     if (depth > MAX_DEPTH || results.length >= MAX_FILES) return;
@@ -512,7 +512,7 @@ ipcMain.handle('fs:listAllFiles', async (event, rootDir) => {
       if (entry.name.startsWith('.')) continue;
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        if (!ignore.has(entry.name)) await walk(fullPath, depth + 1);
+        if (!config.ignore.dirs.has(entry.name)) await walk(fullPath, depth + 1);
       } else {
         results.push(fullPath);
       }
@@ -697,7 +697,7 @@ ipcMain.on('pty:cd', (event, cwd) => {
 // ────────────────────────────────────────────
 function runGit(args, cwd) {
   return new Promise((resolve) => {
-    execFile('git', args, { cwd, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile('git', args, { cwd, maxBuffer: config.exec.maxBuffer }, (err, stdout, stderr) => {
       if (err) {
         resolve({ error: err.message, stderr });
       } else {
@@ -937,12 +937,10 @@ ipcMain.handle('system:cpuUsage', () => {
 //     Busca texto o regex en todos los archivos del proyecto
 // ────────────────────────────────────────────
 ipcMain.handle('search:inFiles', async (event, rootDir, query, options = {}) => {
-  const { isRegex = false, caseSensitive = false, maxResults = 500 } = options;
+  const { isRegex = false, caseSensitive = false, maxResults = config.search.maxResults } = options;
   const results = [];
-  const MAX_DEPTH = 15;
-  const MAX_FILE_SIZE = 1024 * 1024; // 1MB
-  const ignore = new Set(['node_modules', '.git', 'vendor', 'dist', 'build', '.next', '__pycache__', '.idea', '.vscode', 'storage']);
-  const binaryExts = new Set(['png', 'jpg', 'jpeg', 'gif', 'ico', 'svg', 'woff', 'woff2', 'ttf', 'eot', 'mp3', 'mp4', 'zip', 'gz', 'tar', 'pdf', 'exe', 'dll', 'so', 'dylib', 'lock']);
+  const MAX_DEPTH = config.search.maxDepth;
+  const MAX_FILE_SIZE = config.search.maxFileSize;
 
   let regex;
   try {
@@ -966,10 +964,10 @@ ipcMain.handle('search:inFiles', async (event, rootDir, query, options = {}) => 
 
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        if (!ignore.has(entry.name)) await searchDir(fullPath, depth + 1);
+        if (!config.ignore.dirs.has(entry.name)) await searchDir(fullPath, depth + 1);
       } else {
         const ext = path.extname(entry.name).slice(1).toLowerCase();
-        if (binaryExts.has(ext)) continue;
+        if (config.ignore.binaryExts.has(ext)) continue;
 
         try {
           const stat = await fs.promises.stat(fullPath);
@@ -1065,20 +1063,15 @@ const symbolPatterns = {
   ],
 };
 
-const langExtMap = {
-  php: 'php', js: 'javascript', jsx: 'javascript', mjs: 'javascript',
-  ts: 'typescript', tsx: 'typescript',
-  py: 'python', java: 'java', go: 'go', rb: 'ruby', rs: 'rust',
-};
+const langExtMap = config.langExtMap;
 
 const falsePositives = new Set(['if', 'for', 'while', 'switch', 'catch', 'return', 'new', 'else', 'try', 'do', 'throw']);
 
 ipcMain.handle('search:symbols', async (event, rootDir) => {
   const symbols = [];
-  const MAX_DEPTH = 15;
-  const MAX_FILES = 5000;
-  const MAX_FILE_SIZE = 512 * 1024; // 512KB
-  const ignore = new Set(['node_modules', '.git', 'vendor', 'dist', 'build', '.next', '__pycache__', '.idea', '.vscode', 'storage']);
+  const MAX_DEPTH = config.search.maxDepth;
+  const MAX_FILES = config.search.maxFiles;
+  const MAX_FILE_SIZE = config.search.maxSymbolFileSize;
   let fileCount = 0;
 
   async function walkDir(dir, depth) {
@@ -1095,7 +1088,7 @@ ipcMain.handle('search:symbols', async (event, rootDir) => {
       const fullPath = path.join(dir, entry.name);
 
       if (entry.isDirectory()) {
-        if (!ignore.has(entry.name)) await walkDir(fullPath, depth + 1);
+        if (!config.ignore.dirs.has(entry.name)) await walkDir(fullPath, depth + 1);
       } else {
         const ext = path.extname(entry.name).slice(1).toLowerCase();
         const lang = langExtMap[ext];
@@ -1180,146 +1173,69 @@ ipcMain.handle('phpunit:run', async (event, args) => {
 
 // ────────────────────────────────────────────
 // 12. IPC HANDLERS — DATABASE VIEWER
-//      Parsea .env, conecta via CLI de mysql/psql, muestra schema
+//     Usa db-helper.js para parsear .env y ejecutar queries via CLI
 // ────────────────────────────────────────────
 
-function parseEnvFile(folderPath) {
-  const envPath = path.join(folderPath, '.env');
-  if (!fs.existsSync(envPath)) return null;
-  try {
-    const content = fs.readFileSync(envPath, 'utf-8');
-    const vars = {};
-    for (const line of content.split('\n')) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith('#')) continue;
-      const eqIndex = trimmed.indexOf('=');
-      if (eqIndex === -1) continue;
-      const key = trimmed.substring(0, eqIndex).trim();
-      let val = trimmed.substring(eqIndex + 1).trim();
-      // Quitar comillas
-      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
-        val = val.slice(1, -1);
-      }
-      vars[key] = val;
-    }
-    return vars;
-  } catch {
-    return null;
-  }
+// Helper: obtener config de DB del proyecto actual, o devolver error
+function getDbConfig() {
+  if (!projectCapabilities.projectRoot) return { error: 'No project open' };
+  const env = db.parseEnvFile(projectCapabilities.projectRoot);
+  if (!env) return { error: '.env file not found' };
+  return { config: db.getConnectionConfig(env) };
 }
 
-ipcMain.handle('db:getConfig', async (event) => {
-  if (!projectCapabilities.projectRoot) return { error: 'No project open' };
-  const env = parseEnvFile(projectCapabilities.projectRoot);
-  if (!env) return { error: '.env file not found' };
-
-  return {
-    connection: env.DB_CONNECTION || 'mysql',
-    host: env.DB_HOST || '127.0.0.1',
-    port: env.DB_PORT || (env.DB_CONNECTION === 'pgsql' ? '5432' : '3306'),
-    database: env.DB_DATABASE || '',
-    username: env.DB_USERNAME || '',
-    password: env.DB_PASSWORD || '',
-  };
+ipcMain.handle('db:getConfig', async () => {
+  const { error, config: cfg } = getDbConfig();
+  return error ? { error } : cfg;
 });
 
-ipcMain.handle('db:getTables', async (event) => {
-  if (!projectCapabilities.projectRoot) return { error: 'No project open' };
-  const env = parseEnvFile(projectCapabilities.projectRoot);
-  if (!env) return { error: '.env file not found' };
+ipcMain.handle('db:getTables', async () => {
+  const { error, config: cfg } = getDbConfig();
+  if (error) return { error };
 
-  const conn = env.DB_CONNECTION || 'mysql';
-  const host = env.DB_HOST || '127.0.0.1';
-  const port = env.DB_PORT || (conn === 'pgsql' ? '5432' : '3306');
-  const db = env.DB_DATABASE || '';
-  const user = env.DB_USERNAME || '';
-  const pass = env.DB_PASSWORD || '';
+  const sql = cfg.connection === 'pgsql'
+    ? "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename"
+    : 'SHOW TABLES';
 
-  if (conn === 'pgsql') {
-    // PostgreSQL
-    const pgEnv = { ...process.env, PGPASSWORD: pass };
-    return new Promise((resolve) => {
-      execFile('psql', ['-h', host, '-p', port, '-U', user, '-d', db, '-t', '-A', '-c',
-        "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename"],
-        { env: pgEnv, timeout: 10000 }, (err, stdout, stderr) => {
-          if (err) return resolve({ error: stderr || err.message });
-          const tables = stdout.trim().split('\n').filter(Boolean);
-          resolve({ tables });
-        });
-    });
-  } else {
-    // MySQL (default)
-    const args = ['-h', host, '-P', port, '-u', user, db, '-N', '-e', 'SHOW TABLES'];
-    if (pass) args.splice(4, 0, `-p${pass}`);
-    return new Promise((resolve) => {
-      execFile('mysql', args, { timeout: 10000 }, (err, stdout, stderr) => {
-        if (err) return resolve({ error: stderr || err.message });
-        const tables = stdout.trim().split('\n').filter(Boolean);
-        resolve({ tables });
-      });
-    });
-  }
+  const result = await db.execDb(cfg, sql);
+  if (result.error) return result;
+  return { tables: result.output.split('\n').filter(Boolean) };
 });
 
 ipcMain.handle('db:getColumns', async (event, tableName) => {
-  if (!projectCapabilities.projectRoot) return { error: 'No project open' };
-  const env = parseEnvFile(projectCapabilities.projectRoot);
-  if (!env) return { error: '.env file not found' };
+  const { error, config: cfg } = getDbConfig();
+  if (error) return { error };
 
-  const conn = env.DB_CONNECTION || 'mysql';
-  const host = env.DB_HOST || '127.0.0.1';
-  const port = env.DB_PORT || (conn === 'pgsql' ? '5432' : '3306');
-  const db = env.DB_DATABASE || '';
-  const user = env.DB_USERNAME || '';
-  const pass = env.DB_PASSWORD || '';
+  const safeName = db.sanitizeValue(tableName);
+  let sql, parseRow;
 
-  if (conn === 'pgsql') {
-    const pgEnv = { ...process.env, PGPASSWORD: pass };
-    return new Promise((resolve) => {
-      execFile('psql', ['-h', host, '-p', port, '-U', user, '-d', db, '-t', '-A', '-c',
-        `SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_name = '${tableName.replace(/'/g, "''")}' ORDER BY ordinal_position`],
-        { env: pgEnv, timeout: 10000 }, (err, stdout, stderr) => {
-          if (err) return resolve({ error: stderr || err.message });
-          const columns = stdout.trim().split('\n').filter(Boolean).map((line) => {
-            const [name, type, nullable, defaultVal] = line.split('|');
-            return { name, type, nullable: nullable === 'YES', default: defaultVal || null };
-          });
-          resolve({ columns });
-        });
-    });
+  if (cfg.connection === 'pgsql') {
+    sql = `SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_name = '${safeName}' ORDER BY ordinal_position`;
+    parseRow = (line) => {
+      const [name, type, nullable, defaultVal] = line.split('|');
+      return { name, type, nullable: nullable === 'YES', default: defaultVal || null };
+    };
   } else {
-    const args = ['-h', host, '-P', port, '-u', user, db, '-N', '-e',
-      `SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_KEY, COLUMN_DEFAULT FROM information_schema.columns WHERE TABLE_SCHEMA = '${db.replace(/'/g, "''")}' AND TABLE_NAME = '${tableName.replace(/'/g, "''")}' ORDER BY ORDINAL_POSITION`];
-    if (pass) args.splice(4, 0, `-p${pass}`);
-    return new Promise((resolve) => {
-      execFile('mysql', args, { timeout: 10000 }, (err, stdout, stderr) => {
-        if (err) return resolve({ error: stderr || err.message });
-        const columns = stdout.trim().split('\n').filter(Boolean).map((line) => {
-          const [name, type, nullable, key, defaultVal] = line.split('\t');
-          return { name, type, nullable: nullable === 'YES', key: key || null, default: defaultVal || null };
-        });
-        resolve({ columns });
-      });
-    });
+    sql = `SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_KEY, COLUMN_DEFAULT FROM information_schema.columns WHERE TABLE_SCHEMA = '${db.sanitizeValue(cfg.database)}' AND TABLE_NAME = '${safeName}' ORDER BY ORDINAL_POSITION`;
+    parseRow = (line) => {
+      const [name, type, nullable, key, defaultVal] = line.split('\t');
+      return { name, type, nullable: nullable === 'YES', key: key || null, default: defaultVal || null };
+    };
   }
+
+  const result = await db.execDb(cfg, sql);
+  if (result.error) return result;
+  return { columns: result.output.split('\n').filter(Boolean).map(parseRow) };
 });
 
 ipcMain.handle('db:query', async (event, tableName, column, operator, value, limit) => {
-  if (!projectCapabilities.projectRoot) return { error: 'No project open' };
-  const env = parseEnvFile(projectCapabilities.projectRoot);
-  if (!env) return { error: '.env file not found' };
+  const { error, config: cfg } = getDbConfig();
+  if (error) return { error };
 
-  const conn = env.DB_CONNECTION || 'mysql';
-  const host = env.DB_HOST || '127.0.0.1';
-  const port = env.DB_PORT || (conn === 'pgsql' ? '5432' : '3306');
-  const db = env.DB_DATABASE || '';
-  const user = env.DB_USERNAME || '';
-  const pass = env.DB_PASSWORD || '';
-  const safeLimit = Math.min(parseInt(limit) || 50, 200);
+  const safeTable = db.sanitizeIdentifier(tableName);
+  const safeColumn = db.sanitizeIdentifier(column);
+  const safeLimit = Math.min(parseInt(limit) || config.db.queryLimit.default, config.db.queryLimit.max);
 
-  // Sanitizar: solo permitir nombres alfanuméricos y underscore
-  const safeTable = tableName.replace(/[^a-zA-Z0-9_]/g, '');
-  const safeColumn = column.replace(/[^a-zA-Z0-9_]/g, '');
   const allowedOps = ['=', '!=', '>', '<', '>=', '<=', 'LIKE', 'NOT LIKE', 'IS NULL', 'IS NOT NULL'];
   const safeOp = allowedOps.includes(operator) ? operator : '=';
 
@@ -1328,117 +1244,45 @@ ipcMain.handle('db:query', async (event, tableName, column, operator, value, lim
     if (safeOp === 'IS NULL' || safeOp === 'IS NOT NULL') {
       whereClause = `WHERE \`${safeColumn}\` ${safeOp}`;
     } else if (safeOp === 'LIKE' || safeOp === 'NOT LIKE') {
-      const safeVal = value.replace(/'/g, "''");
-      whereClause = `WHERE \`${safeColumn}\` ${safeOp} '%${safeVal}%'`;
+      whereClause = `WHERE \`${safeColumn}\` ${safeOp} '%${db.sanitizeValue(value)}%'`;
     } else {
-      const safeVal = value.replace(/'/g, "''");
-      whereClause = `WHERE \`${safeColumn}\` ${safeOp} '${safeVal}'`;
+      whereClause = `WHERE \`${safeColumn}\` ${safeOp} '${db.sanitizeValue(value)}'`;
     }
   }
 
-  const sql = `SELECT * FROM \`${safeTable}\` ${whereClause} LIMIT ${safeLimit}`;
+  let sql = `SELECT * FROM \`${safeTable}\` ${whereClause} LIMIT ${safeLimit}`;
+  if (cfg.connection === 'pgsql') sql = sql.replace(/`/g, '"');
 
-  if (conn === 'pgsql') {
-    // PostgreSQL: backticks → double quotes
-    const pgSql = sql.replace(/`/g, '"');
-    const pgEnv = { ...process.env, PGPASSWORD: pass };
-    return new Promise((resolve) => {
-      execFile('psql', ['-h', host, '-p', port, '-U', user, '-d', db, '-c', pgSql, '--csv'],
-        { env: pgEnv, timeout: 15000 }, (err, stdout, stderr) => {
-          if (err) return resolve({ error: stderr || err.message, sql: pgSql });
-          const lines = stdout.trim().split('\n');
-          if (lines.length < 1) return resolve({ columns: [], rows: [], sql: pgSql });
-          const headers = parseCsvLine(lines[0]);
-          const rows = lines.slice(1).map((line) => parseCsvLine(line));
-          resolve({ columns: headers, rows, sql: pgSql });
-        });
-    });
-  } else {
-    // MySQL
-    const args = ['-h', host, '-P', port, '-u', user, db, '-e', sql, '--batch'];
-    if (pass) args.splice(4, 0, `-p${pass}`);
-    return new Promise((resolve) => {
-      execFile('mysql', args, { timeout: 15000 }, (err, stdout, stderr) => {
-        if (err) return resolve({ error: stderr || err.message, sql });
-        const lines = stdout.trim().split('\n');
-        if (lines.length < 1) return resolve({ columns: [], rows: [], sql });
-        const headers = lines[0].split('\t');
-        const rows = lines.slice(1).map((line) => line.split('\t'));
-        resolve({ columns: headers, rows, sql });
-      });
-    });
+  const result = await db.execDb(cfg, sql, { csv: true });
+  if (result.error) return { error: result.error, sql };
+
+  const lines = result.output.split('\n');
+  if (lines.length < 1) return { columns: [], rows: [], sql };
+
+  if (cfg.connection === 'pgsql') {
+    return { columns: db.parseCsvLine(lines[0]), rows: lines.slice(1).filter(Boolean).map(db.parseCsvLine), sql };
   }
+  return { columns: lines[0].split('\t'), rows: lines.slice(1).filter(Boolean).map((l) => l.split('\t')), sql };
 });
 
 ipcMain.handle('db:update', async (event, tableName, pkColumn, pkValue, column, newValue) => {
-  if (!projectCapabilities.projectRoot) return { error: 'No project open' };
-  const env = parseEnvFile(projectCapabilities.projectRoot);
-  if (!env) return { error: '.env file not found' };
+  const { error, config: cfg } = getDbConfig();
+  if (error) return { error };
 
-  const conn = env.DB_CONNECTION || 'mysql';
-  const host = env.DB_HOST || '127.0.0.1';
-  const port = env.DB_PORT || (conn === 'pgsql' ? '5432' : '3306');
-  const db = env.DB_DATABASE || '';
-  const user = env.DB_USERNAME || '';
-  const pass = env.DB_PASSWORD || '';
+  const safeTable = db.sanitizeIdentifier(tableName);
+  const safePkCol = db.sanitizeIdentifier(pkColumn);
+  const safeCol = db.sanitizeIdentifier(column);
+  const setClause = newValue === null
+    ? `\`${safeCol}\` = NULL`
+    : `\`${safeCol}\` = '${db.sanitizeValue(newValue)}'`;
 
-  const safeTable = tableName.replace(/[^a-zA-Z0-9_]/g, '');
-  const safePkCol = pkColumn.replace(/[^a-zA-Z0-9_]/g, '');
-  const safeCol = column.replace(/[^a-zA-Z0-9_]/g, '');
-  const safePkVal = String(pkValue).replace(/'/g, "''");
+  let sql = `UPDATE \`${safeTable}\` SET ${setClause} WHERE \`${safePkCol}\` = '${db.sanitizeValue(pkValue)}' LIMIT 1`;
+  if (cfg.connection === 'pgsql') sql = sql.replace(/`/g, '"').replace(/ LIMIT 1/, '');
 
-  let setClause;
-  if (newValue === null) {
-    setClause = `\`${safeCol}\` = NULL`;
-  } else {
-    const safeNewVal = String(newValue).replace(/'/g, "''");
-    setClause = `\`${safeCol}\` = '${safeNewVal}'`;
-  }
-
-  const sql = `UPDATE \`${safeTable}\` SET ${setClause} WHERE \`${safePkCol}\` = '${safePkVal}' LIMIT 1`;
-
-  if (conn === 'pgsql') {
-    const pgSql = sql.replace(/`/g, '"').replace(/ LIMIT 1/, '');
-    const pgEnv = { ...process.env, PGPASSWORD: pass };
-    return new Promise((resolve) => {
-      execFile('psql', ['-h', host, '-p', port, '-U', user, '-d', db, '-c', pgSql],
-        { env: pgEnv, timeout: 10000 }, (err, stdout, stderr) => {
-          if (err) return resolve({ error: stderr || err.message, sql: pgSql });
-          resolve({ success: true, sql: pgSql });
-        });
-    });
-  } else {
-    const args = ['-h', host, '-P', port, '-u', user, db, '-e', sql];
-    if (pass) args.splice(4, 0, `-p${pass}`);
-    return new Promise((resolve) => {
-      execFile('mysql', args, { timeout: 10000 }, (err, stdout, stderr) => {
-        if (err) return resolve({ error: stderr || err.message, sql });
-        resolve({ success: true, sql });
-      });
-    });
-  }
+  const result = await db.execDb(cfg, sql);
+  if (result.error) return { error: result.error, sql };
+  return { success: true, sql };
 });
-
-// Parsear una línea CSV simple (para psql --csv)
-function parseCsvLine(line) {
-  const result = [];
-  let current = '';
-  let inQuotes = false;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (inQuotes) {
-      if (ch === '"' && line[i + 1] === '"') { current += '"'; i++; }
-      else if (ch === '"') { inQuotes = false; }
-      else { current += ch; }
-    } else {
-      if (ch === '"') { inQuotes = true; }
-      else if (ch === ',') { result.push(current); current = ''; }
-      else { current += ch; }
-    }
-  }
-  result.push(current);
-  return result;
-}
 
 // ────────────────────────────────────────────
 // 13. IPC HANDLER — PSR-4 NAMESPACE RESOLVER
