@@ -1674,6 +1674,21 @@ async function refreshGitStatus() {
 
   const { files } = statusResult;
   renderGitFiles(files);
+
+  // Actualizar badge en el icono de Source Control
+  const totalChanges = (files.staged?.length || 0) + (files.unstaged?.length || 0) + (files.untracked?.length || 0);
+  const gitBtn = document.getElementById('btn-toggle-git');
+  let badge = gitBtn.querySelector('.action-badge');
+  if (totalChanges > 0) {
+    if (!badge) {
+      badge = document.createElement('span');
+      badge.className = 'action-badge';
+      gitBtn.appendChild(badge);
+    }
+    badge.textContent = totalChanges > 99 ? '99+' : totalChanges;
+  } else if (badge) {
+    badge.remove();
+  }
 }
 
 /**

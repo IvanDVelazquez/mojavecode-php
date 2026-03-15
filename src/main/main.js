@@ -471,7 +471,7 @@ ipcMain.handle('fs:readDir', async (event, dirPath) => {
   try {
     const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
     return entries
-      .filter((entry) => !entry.name.startsWith('.')) // Ocultar dotfiles
+      .filter((entry) => !(entry.name.startsWith('.') && entry.isDirectory())) // Ocultar dot-directories (.git, etc), mostrar dotfiles (.env, .gitignore)
       .sort((a, b) => {
         // Carpetas primero, después archivos
         if (a.isDirectory() && !b.isDirectory()) return -1;
@@ -509,10 +509,10 @@ ipcMain.handle('fs:listAllFiles', async (event, rootDir) => {
     }
     for (const entry of entries) {
       if (results.length >= MAX_FILES) break;
-      if (entry.name.startsWith('.')) continue;
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        if (!config.ignore.dirs.has(entry.name)) await walk(fullPath, depth + 1);
+        if (entry.name.startsWith('.') || config.ignore.dirs.has(entry.name)) continue;
+        await walk(fullPath, depth + 1);
       } else {
         results.push(fullPath);
       }
