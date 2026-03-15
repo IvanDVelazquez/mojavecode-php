@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!--
+    MojaveCode PHP icon
+    Colors from the light theme palette:
+      Background: #FEFAF7 (warm sand)
+      Border:     #E4C9A8 (sand border)
+      Text:       #1F4266 (deep blue)
+      Accent:     #E85324 (sunset orange)
+  -->
+
+  <!-- Rounded square background -->
+  <rect x="64" y="64" width="896" height="896" rx="196" ry="196" fill="#FEFAF7"/>
+  <rect x="64" y="64" width="896" height="896" rx="196" ry="196" fill="none" stroke="#E4C9A8" stroke-width="3"/>
+
+  <!-- MC text -->
+  <text x="512" y="462" text-anchor="middle" dominant-baseline="central"
+        font-family="'Arial Black', 'Helvetica Neue', sans-serif"
+        font-weight="900" font-size="390" fill="#1F4266">MC</text>
+
+  <!-- Underscore bar -->
+  <rect x="282" y="605" width="460" height="46" rx="23" ry="23" fill="#E85324"/>
+</svg>
