@@ -33,9 +33,56 @@ const { app, BrowserWindow, ipcMain, dialog, Menu, shell } = require('electron')
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const { execFile } = require('child_process');
+const { execFile, execSync } = require('child_process');
 const config = require('../config');
 const db = require('./db-helper');
+
+// ── Fix PATH para apps empaquetadas en macOS ──
+// Cuando Electron corre como .app, el PATH es mínimo (/usr/bin:/bin:/usr/sbin:/sbin).
+// Binarios como php, mysql, composer (instalados via Homebrew, MAMP, Herd, etc.)
+// no se encuentran. Reconstruimos el PATH desde las fuentes del sistema + paths comunes.
+if (app.isPackaged && process.platform === 'darwin') {
+  const home = os.homedir();
+  // Paths comunes donde viven binarios de desarrollo en macOS
+  const extraPaths = [
+    '/opt/homebrew/bin', '/opt/homebrew/sbin',              // Homebrew ARM (M1+)
+    '/opt/homebrew/opt/php@8.1/bin',                        // PHP versionado
+    '/opt/homebrew/opt/php@8.2/bin',
+    '/opt/homebrew/opt/php@8.3/bin',
+    '/opt/homebrew/opt/php@8.4/bin',
+    '/opt/homebrew/opt/mysql/bin',                           // MySQL via Homebrew
+    '/opt/homebrew/opt/mysql-client/bin',
+    '/usr/local/bin', '/usr/local/sbin',                     // Homebrew Intel
+    '/usr/local/opt/php@8.1/bin',
+    '/usr/local/opt/php@8.2/bin',
+    '/usr/local/opt/php@8.3/bin',
+    '/usr/local/opt/mysql/bin',
+    '/usr/local/mysql/bin',                                  // MySQL installer oficial
+    `${home}/.composer/vendor/bin`,                          // Composer global
+    `${home}/Library/Application Support/Herd/bin`,          // Laravel Herd
+    '/Applications/MAMP/bin/php/php8.2.0/bin',               // MAMP
+    '/Applications/MAMP/Library/bin',
+  ];
+
+  // Leer /etc/paths y /etc/paths.d/* (fuente oficial de PATH en macOS)
+  try {
+    const systemPaths = fs.readFileSync('/etc/paths', 'utf8').trim().split('\n');
+    const pathsDir = '/etc/paths.d';
+    if (fs.existsSync(pathsDir)) {
+      for (const file of fs.readdirSync(pathsDir)) {
+        const content = fs.readFileSync(path.join(pathsDir, file), 'utf8').trim();
+        if (content) systemPaths.push(...content.split('\n'));
+      }
+    }
+    extraPaths.push(...systemPaths);
+  } catch { /* ignorar si no se puede leer */ }
+
+  // Filtrar solo paths que existen y agregar al PATH actual
+  const existing = extraPaths.filter((p) => {
+    try { return fs.statSync(p).isDirectory(); } catch { return false; }
+  });
+  process.env.PATH = [...new Set([...existing, ...process.env.PATH.split(':')])].join(':');
+}
 
 // node-pty: pseudo-terminal para la terminal integrada
 // Se importa con try/catch porque es un native module que
@@ -1424,20 +1471,35 @@ ipcMain.on('window:close', () => mainWindow?.close());
 // 17. APP LIFECYCLE — Inicio, activación y cierre de Electron
 //     whenReady → crea menú y ventana; gestiona quit y cleanup
 // ────────────────────────────────────────────
-// app.whenReady() se resuelve cuando Electron terminó de inicializar
-// y el GPU process está listo. Es el punto de entrada principal:
-// primero armamos el menú nativo, después creamos la ventana.
-app.whenReady().then(() => {
-  createMenu();
-  createWindow();
-
-  // macOS: re-crear ventana al clickear el dock icon si no hay ninguna abierta
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
+// ── Instancia única ──
+// Evita que se abran múltiples ventanas de MojaveCode al mismo tiempo.
+// Si el usuario lanza la app de nuevo, se enfoca la ventana existente.
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
     }
   });
-});
+
+  // app.whenReady() se resuelve cuando Electron terminó de inicializar
+  // y el GPU process está listo. Es el punto de entrada principal:
+  // primero armamos el menú nativo, después creamos la ventana.
+  app.whenReady().then(() => {
+    createMenu();
+    createWindow();
+
+    // macOS: re-crear ventana al clickear el dock icon si no hay ninguna abierta
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        createWindow();
+      }
+    });
+  });
+}
 
 // Salir cuando se cierran todas las ventanas (excepto macOS)
 app.on('window-all-closed', () => {
