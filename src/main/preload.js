@@ -131,10 +131,11 @@ contextBridge.exposeInMainWorld('api', {
 
   // ── Database Viewer ──
   dbGetConfig: () => ipcRenderer.invoke('db:getConfig'),
-  dbGetTables: () => ipcRenderer.invoke('db:getTables'),
-  dbGetColumns: (table) => ipcRenderer.invoke('db:getColumns', table),
-  dbQuery: (table, column, operator, value, limit) => ipcRenderer.invoke('db:query', table, column, operator, value, limit),
-  dbUpdate: (table, pkCol, pkVal, col, newVal) => ipcRenderer.invoke('db:update', table, pkCol, pkVal, col, newVal),
+  dbGetConnections: () => ipcRenderer.invoke('db:getConnections'),
+  dbGetTables: (connKey) => ipcRenderer.invoke('db:getTables', connKey),
+  dbGetColumns: (table, connKey) => ipcRenderer.invoke('db:getColumns', table, connKey),
+  dbQuery: (table, column, operator, value, limit, connKey) => ipcRenderer.invoke('db:query', table, column, operator, value, limit, connKey),
+  dbUpdate: (table, pkCol, pkVal, col, newVal, connKey) => ipcRenderer.invoke('db:update', table, pkCol, pkVal, col, newVal, connKey),
 
   // ── Laravel Route List ──
   laravelRouteList: () => ipcRenderer.invoke('laravel:routeList'),

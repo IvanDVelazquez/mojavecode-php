@@ -53,6 +53,77 @@ function getConnectionConfig(env) {
 }
 
 /**
+ * Detecta todas las conexiones de BD en un .env parseado.
+ * Busca patrones: DB_DATABASE, DB_{PREFIX}_DATABASE, DB_DATABASE_{SUFFIX}
+ * Para cada una, intenta encontrar credenciales con el mismo prefijo/sufijo,
+ * y si no existen, usa las credenciales por defecto (DB_HOST, etc.).
+ * Retorna un array de { key, label, config }.
+ */
+function getAllConnectionConfigs(env) {
+  const connections = [];
+  const defaultConn = env.DB_CONNECTION || 'mysql';
+  const defaults = {
+    connection: defaultConn,
+    host: env.DB_HOST || '127.0.0.1',
+    port: env.DB_PORT || config.db.defaultPorts[defaultConn] || '3306',
+    username: env.DB_USERNAME || '',
+    password: env.DB_PASSWORD || '',
+  };
+
+  for (const key of Object.keys(env)) {
+    let label = null;
+    let prefix = null;
+
+    if (key === 'DB_DATABASE') {
+      // Default connection
+      label = 'default';
+      prefix = 'DB';
+    } else if (/^DB_([A-Z0-9_]+)_DATABASE$/.test(key)) {
+      // DB_{PREFIX}_DATABASE — e.g. DB_ADMIN_DATABASE
+      const match = key.match(/^DB_([A-Z0-9_]+)_DATABASE$/);
+      label = match[1].toLowerCase();
+      prefix = `DB_${match[1]}`;
+    } else if (/^DB_DATABASE_([A-Z0-9_]+)$/.test(key)) {
+      // DB_DATABASE_{SUFFIX} — e.g. DB_DATABASE_BLOG
+      const match = key.match(/^DB_DATABASE_([A-Z0-9_]+)$/);
+      label = match[1].toLowerCase();
+      prefix = `DB_${match[1]}`;
+    } else {
+      continue;
+    }
+
+    const database = env[key];
+    if (!database) continue;
+
+    // Buscar credenciales específicas para esta conexión, fallback a defaults
+    const conn = env[`${prefix}_CONNECTION`] || defaults.connection;
+    connections.push({
+      key: label,
+      label: label === 'default' ? database : `${label} (${database})`,
+      config: {
+        connection: conn,
+        host: env[`${prefix}_HOST`] || defaults.host,
+        port: env[`${prefix}_PORT`] || config.db.defaultPorts[conn] || defaults.port,
+        database,
+        username: env[`${prefix}_USERNAME`] || defaults.username,
+        password: env[`${prefix}_PASSWORD`] || defaults.password,
+      },
+    });
+  }
+
+  // Si no encontró nada, intentar con la config por defecto
+  if (connections.length === 0 && env.DB_DATABASE) {
+    connections.push({
+      key: 'default',
+      label: env.DB_DATABASE,
+      config: { ...defaults, database: env.DB_DATABASE },
+    });
+  }
+
+  return connections;
+}
+
+/**
  * Ejecuta un comando mysql/psql y devuelve una Promise con el resultado.
  */
 function execDb(dbConfig, sql, options = {}) {
@@ -134,6 +205,7 @@ function parseCsvLine(line) {
 module.exports = {
   parseEnvFile,
   getConnectionConfig,
+  getAllConnectionConfigs,
   execDb,
   sanitizeIdentifier,
   sanitizeValue,

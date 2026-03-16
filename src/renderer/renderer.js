@@ -2847,55 +2847,115 @@ async function loadDbTables() {
   const container = document.getElementById('db-viewer-container');
   container.innerHTML = '<div class="db-loading">Connecting to database...</div>';
 
-  const config = await window.api.dbGetConfig();
-  if (config.error) {
-    container.innerHTML = `
-      <div class="db-error">Database config error</div>
-      <pre class="route-raw-output">${escapeHtml(config.error)}</pre>`;
-    console.error('[DB Viewer]', config.error);
+  // Intentar obtener múltiples conexiones
+  const connResult = await window.api.dbGetConnections();
+  let connections;
+
+  if (connResult.error) {
+    // Fallback a la config simple
+    const config = await window.api.dbGetConfig();
+    if (config.error) {
+      container.innerHTML = `
+        <div class="db-error">Database config error</div>
+        <pre class="route-raw-output">${escapeHtml(config.error)}</pre>`;
+      console.error('[DB Viewer]', config.error);
+      return;
+    }
+    connections = [{ key: 'default', label: config.database, config }];
+  } else {
+    connections = connResult.connections;
+  }
+
+  if (connections.length === 0) {
+    container.innerHTML = '<div class="db-error">No database configured in .env</div>';
     return;
   }
 
-  const result = await window.api.dbGetTables();
-  if (result.error) {
-    container.innerHTML = `
-      <div class="db-header">
-        <span class="db-header-title">${escapeHtml(config.database)} (${config.connection})</span>
-        <span class="db-header-host">${escapeHtml(config.host)}:${config.port}</span>
-      </div>
-      <div class="db-error">Connection failed</div>
-      <pre class="route-raw-output">${escapeHtml(result.error)}</pre>`;
-    console.error('[DB Viewer]', result.error);
-    return;
-  }
+  const multiDb = connections.length > 1;
 
+  // Header global con search
   let html = `
     <div class="db-header">
-      <span class="db-header-title">${escapeHtml(config.database)}</span>
-      <span class="db-header-host">${escapeHtml(config.connection)}://${escapeHtml(config.host)}:${config.port}</span>
-      <span class="db-header-count">${result.tables.length} tables</span>
+      <span class="db-header-title">${multiDb ? `${connections.length} Databases` : escapeHtml(connections[0].config.database)}</span>
+      ${!multiDb ? `<span class="db-header-host">${escapeHtml(connections[0].config.connection)}://${escapeHtml(connections[0].config.host)}:${connections[0].config.port}</span>` : ''}
+      <span class="db-header-count"></span>
       <div class="db-search-bar" id="db-search-bar" style="display:none">
         <input id="db-search-input" type="text" placeholder="Filter tables..." autocomplete="off" spellcheck="false" />
         <span id="db-search-count" class="route-search-count"></span>
         <button id="db-search-close" class="route-search-close" title="Close (Esc)">&times;</button>
       </div>
-    </div>
-    <div class="db-table-list">`;
+    </div>`;
 
-  for (const table of result.tables) {
-    html += `
-      <div class="db-table-group" data-table="${escapeAttr(table)}">
-        <div class="db-table-header">
-          <span class="db-table-chevron">▸</span>
-          <span class="db-table-icon">T</span>
-          <span class="db-table-name">${escapeHtml(table)}</span>
-        </div>
-        <div class="db-table-columns" style="display:none"></div>
-      </div>`;
+  // Cargar tablas de cada conexión en paralelo
+  const tablesResults = await Promise.all(
+    connections.map((conn) => window.api.dbGetTables(conn.key))
+  );
+
+  let totalTables = 0;
+
+  for (let i = 0; i < connections.length; i++) {
+    const conn = connections[i];
+    const result = tablesResults[i];
+
+    if (multiDb) {
+      // Sección colapsable por base de datos
+      html += `
+        <div class="db-connection-group" data-conn-key="${escapeAttr(conn.key)}">
+          <div class="db-connection-header">
+            <span class="db-connection-chevron">▸</span>
+            <span class="db-connection-icon">DB</span>
+            <span class="db-connection-name">${escapeHtml(conn.config.database)}</span>
+            <span class="db-connection-info">${escapeHtml(conn.config.connection)}://${escapeHtml(conn.config.host)}:${conn.config.port}</span>
+            <span class="db-connection-count">${result.error ? 'error' : `${result.tables.length} tables`}</span>
+          </div>
+          <div class="db-connection-body" style="display:none">`;
+    }
+
+    if (result.error) {
+      html += `
+        <div class="db-error">Connection failed</div>
+        <pre class="route-raw-output">${escapeHtml(result.error)}</pre>`;
+    } else {
+      totalTables += result.tables.length;
+      html += '<div class="db-table-list">';
+      for (const table of result.tables) {
+        html += `
+          <div class="db-table-group" data-table="${escapeAttr(table)}" data-conn-key="${escapeAttr(conn.key)}">
+            <div class="db-table-header">
+              <span class="db-table-chevron">▸</span>
+              <span class="db-table-icon">T</span>
+              <span class="db-table-name">${escapeHtml(table)}</span>
+            </div>
+            <div class="db-table-columns" style="display:none"></div>
+          </div>`;
+      }
+      html += '</div>';
+    }
+
+    if (multiDb) {
+      html += '</div></div>';
+    }
   }
 
-  html += '</div>';
   container.innerHTML = html;
+
+  // Actualizar conteo total
+  const headerCount = container.querySelector('.db-header-count');
+  if (headerCount) headerCount.textContent = `${totalTables} tables`;
+
+  // Click handlers para secciones de conexión (collapse/expand)
+  if (multiDb) {
+    container.querySelectorAll('.db-connection-header').forEach((header) => {
+      header.addEventListener('click', () => {
+        const group = header.closest('.db-connection-group');
+        const body = group.querySelector('.db-connection-body');
+        const chevron = group.querySelector('.db-connection-chevron');
+        const isOpen = body.style.display !== 'none';
+        body.style.display = isOpen ? 'none' : '';
+        chevron.textContent = isOpen ? '▸' : '▾';
+      });
+    });
+  }
 
   // Click handlers: expand/collapse tables
   container.querySelectorAll('.db-table-header').forEach((header) => {
@@ -2903,6 +2963,7 @@ async function loadDbTables() {
       const group = header.closest('.db-table-group');
       const columnsEl = group.querySelector('.db-table-columns');
       const chevron = group.querySelector('.db-table-chevron');
+      const connKey = group.dataset.connKey;
       const isOpen = columnsEl.style.display !== 'none';
 
       if (isOpen) {
@@ -2918,7 +2979,7 @@ async function loadDbTables() {
       if (!columnsEl.dataset.loaded) {
         columnsEl.innerHTML = '<div class="db-col-loading">Loading...</div>';
         const tableName = group.dataset.table;
-        const colResult = await window.api.dbGetColumns(tableName);
+        const colResult = await window.api.dbGetColumns(tableName, connKey);
 
         if (colResult.error) {
           columnsEl.innerHTML = `<div class="db-error" style="padding:4px 24px;font-size:11px">${escapeHtml(colResult.error)}</div>`;
@@ -2992,7 +3053,7 @@ async function loadDbTables() {
             const col = queryBar.querySelector('.db-query-col').value;
             const op = opSelect.value;
             const val = valInput.value;
-            dbRunQuery(tableName, col, op, val, 50, resultsDiv);
+            dbRunQuery(tableName, col, op, val, 50, resultsDiv, connKey);
           });
 
           // Enter en el input
@@ -3000,13 +3061,13 @@ async function loadDbTables() {
             if (e.key === 'Enter') {
               const col = queryBar.querySelector('.db-query-col').value;
               const op = opSelect.value;
-              dbRunQuery(tableName, col, op, valInput.value, 50, resultsDiv);
+              dbRunQuery(tableName, col, op, valInput.value, 50, resultsDiv, connKey);
             }
           });
 
           // All rows
           queryBar.querySelector('.db-query-all').addEventListener('click', () => {
-            dbRunQuery(tableName, '', '', '', 50, resultsDiv);
+            dbRunQuery(tableName, '', '', '', 50, resultsDiv, connKey);
           });
         }
         columnsEl.dataset.loaded = 'true';
@@ -3015,7 +3076,7 @@ async function loadDbTables() {
   });
 
   // Search/filter en tablas (Cmd+F)
-  initDbSearch(container, result.tables.length);
+  initDbSearch(container, totalTables);
 }
 
 function initDbSearch(container, totalCount) {
@@ -3026,6 +3087,7 @@ function initDbSearch(container, totalCount) {
   if (!searchBar || !searchInput) return;
 
   const groups = container.querySelectorAll('.db-table-group');
+  const connGroups = container.querySelectorAll('.db-connection-group');
 
   function showDbSearch() {
     searchBar.style.display = 'flex';
@@ -3047,6 +3109,12 @@ function initDbSearch(container, totalCount) {
         });
         nameEl.normalize();
       }
+    });
+    // Mostrar todas las secciones de conexión
+    connGroups.forEach((cg) => {
+      cg.style.display = '';
+      const body = cg.querySelector('.db-connection-body');
+      if (body) body.style.display = '';
     });
     const headerCount = container.querySelector('.db-header-count');
     if (headerCount) headerCount.textContent = `${totalCount} tables`;
@@ -3083,6 +3151,15 @@ function initDbSearch(container, totalCount) {
       }
     });
 
+    // Mostrar/ocultar secciones de conexión según si tienen tablas visibles
+    connGroups.forEach((cg) => {
+      const visibleTables = cg.querySelectorAll('.db-table-group:not([style*="display: none"])');
+      cg.style.display = visibleTables.length > 0 ? '' : 'none';
+      // Expandir la sección si tiene resultados
+      const body = cg.querySelector('.db-connection-body');
+      if (body && visibleTables.length > 0) body.style.display = '';
+    });
+
     searchCount.textContent = `${visible} / ${totalCount}`;
     const headerCount = container.querySelector('.db-header-count');
     if (headerCount) headerCount.textContent = `${visible} / ${totalCount} tables`;
@@ -3102,10 +3179,10 @@ function initDbSearch(container, totalCount) {
   container._showDbSearch = showDbSearch;
 }
 
-async function dbRunQuery(tableName, column, operator, value, limit, resultsDiv) {
+async function dbRunQuery(tableName, column, operator, value, limit, resultsDiv, connKey) {
   resultsDiv.innerHTML = '<div class="db-col-loading">Querying...</div>';
 
-  const result = await window.api.dbQuery(tableName, column, operator, value, limit);
+  const result = await window.api.dbQuery(tableName, column, operator, value, limit, connKey);
 
   if (result.error) {
     resultsDiv.innerHTML = `
@@ -3143,7 +3220,7 @@ async function dbRunQuery(tableName, column, operator, value, limit, resultsDiv)
   let html = `<div class="db-query-sql">${escapeHtml(result.sql)}</div>
     <div class="db-query-info">${result.rows.length} row${result.rows.length !== 1 ? 's' : ''}${pkColumn ? ' — double-click cell to edit' : ''}</div>
     <div class="db-results-table-wrap">
-    <table class="db-results-table" data-table="${escapeAttr(tableName)}" data-pk="${escapeAttr(pkColumn || '')}">
+    <table class="db-results-table" data-table="${escapeAttr(tableName)}" data-pk="${escapeAttr(pkColumn || '')}" data-conn-key="${escapeAttr(connKey || '')}">
       <thead><tr>${result.columns.map((c) => `<th>${escapeHtml(c)}</th>`).join('')}</tr></thead>
       <tbody>`;
 
@@ -3175,6 +3252,7 @@ function dbStartCellEdit(td) {
   const table = td.closest('table');
   const tableName = table.dataset.table;
   const pkColumn = table.dataset.pk;
+  const connKey = table.dataset.connKey || undefined;
   const pkValue = td.closest('tr').dataset.pkValue;
   const colName = td.dataset.col;
   const currentValue = td.classList.contains('db-cell-null') ? '' : td.textContent;
@@ -3207,7 +3285,7 @@ function dbStartCellEdit(td) {
     // Ejecutar UPDATE
     const result = await window.api.dbUpdate(
       tableName, pkColumn, pkValue, colName,
-      isNull ? null : newValue
+      isNull ? null : newValue, connKey
     );
 
     if (result.error) {

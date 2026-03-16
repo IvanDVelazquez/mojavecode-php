@@ -1380,13 +1380,43 @@ function getLocalDbConfig() {
   return { config: cfg };
 }
 
+// Helper: obtener todas las conexiones de DB, ajustadas para local
+function getAllLocalDbConfigs() {
+  if (!projectCapabilities.projectRoot) return { error: 'No project open' };
+  const env = db.parseEnvFile(projectCapabilities.projectRoot);
+  if (!env) return { error: '.env file not found' };
+  const connections = db.getAllConnectionConfigs(env);
+  if (connections.length === 0) return { error: 'No database configured in .env' };
+  for (const conn of connections) {
+    if (conn.config.host === 'host.docker.internal') {
+      conn.config.host = '127.0.0.1';
+    }
+  }
+  return { connections };
+}
+
+// Helper: obtener config de una conexión específica por key
+function getLocalDbConfigByKey(connKey) {
+  const { error, connections } = getAllLocalDbConfigs();
+  if (error) return { error };
+  const found = connections.find((c) => c.key === connKey);
+  if (!found) return { error: `Connection "${connKey}" not found` };
+  return { config: found.config };
+}
+
 ipcMain.handle('db:getConfig', async () => {
   const { error, config: cfg } = getLocalDbConfig();
   return error ? { error } : cfg;
 });
 
-ipcMain.handle('db:getTables', async () => {
-  const { error, config: cfg } = getLocalDbConfig();
+ipcMain.handle('db:getConnections', async () => {
+  const { error, connections } = getAllLocalDbConfigs();
+  if (error) return { error };
+  return { connections: connections.map((c) => ({ key: c.key, label: c.label, config: c.config })) };
+});
+
+ipcMain.handle('db:getTables', async (event, connKey) => {
+  const { error, config: cfg } = connKey ? getLocalDbConfigByKey(connKey) : getLocalDbConfig();
   if (error) return { error };
 
   const sql = cfg.connection === 'pgsql'
@@ -1398,8 +1428,8 @@ ipcMain.handle('db:getTables', async () => {
   return { tables: result.output.split('\n').filter(Boolean) };
 });
 
-ipcMain.handle('db:getColumns', async (event, tableName) => {
-  const { error, config: cfg } = getLocalDbConfig();
+ipcMain.handle('db:getColumns', async (event, tableName, connKey) => {
+  const { error, config: cfg } = connKey ? getLocalDbConfigByKey(connKey) : getLocalDbConfig();
   if (error) return { error };
 
   const safeName = db.sanitizeValue(tableName);
@@ -1424,8 +1454,8 @@ ipcMain.handle('db:getColumns', async (event, tableName) => {
   return { columns: result.output.split('\n').filter(Boolean).map(parseRow) };
 });
 
-ipcMain.handle('db:query', async (event, tableName, column, operator, value, limit) => {
-  const { error, config: cfg } = getLocalDbConfig();
+ipcMain.handle('db:query', async (event, tableName, column, operator, value, limit, connKey) => {
+  const { error, config: cfg } = connKey ? getLocalDbConfigByKey(connKey) : getLocalDbConfig();
   if (error) return { error };
 
   const safeTable = db.sanitizeIdentifier(tableName);
@@ -1461,8 +1491,8 @@ ipcMain.handle('db:query', async (event, tableName, column, operator, value, lim
   return { columns: lines[0].split('\t'), rows: lines.slice(1).filter(Boolean).map((l) => l.split('\t')), sql };
 });
 
-ipcMain.handle('db:update', async (event, tableName, pkColumn, pkValue, column, newValue) => {
-  const { error, config: cfg } = getLocalDbConfig();
+ipcMain.handle('db:update', async (event, tableName, pkColumn, pkValue, column, newValue, connKey) => {
+  const { error, config: cfg } = connKey ? getLocalDbConfigByKey(connKey) : getLocalDbConfig();
   if (error) return { error };
 
   const safeTable = db.sanitizeIdentifier(tableName);
