@@ -108,6 +108,10 @@ let projectCapabilities = {
   hasPint: false,
   hasCsFixer: false,
   hasPhpUnit: false,
+  hasDocker: false, // Dockerfile o docker-compose presente
+  dockerEnv: false, // .env contiene host.docker.internal
+  dockerContainer: null, // nombre del contenedor Docker
+  dockerWorkdir: null, // workdir dentro del contenedor
   formatOnSave: false, // desactivado por defecto
   projectRoot: null,
 };
@@ -490,6 +494,35 @@ function detectProjectCapabilities(folderPath) {
   projectCapabilities.hasPhpUnit = fs.existsSync(path.join(folderPath, 'phpunit.xml'))
     || fs.existsSync(path.join(folderPath, 'phpunit.xml.dist'));
 
+  // Detectar Docker — buscar docker-compose.yml subiendo directorios
+  projectCapabilities.hasDocker = false;
+  projectCapabilities.dockerEnv = false;
+  projectCapabilities.dockerContainer = null;
+  projectCapabilities.dockerWorkdir = null;
+
+  const composePath = findDockerCompose(folderPath);
+  if (composePath) {
+    projectCapabilities.hasDocker = true;
+    const dockerConfig = parseDockerConfig(composePath, folderPath);
+    if (dockerConfig) {
+      projectCapabilities.dockerContainer = dockerConfig.containerName;
+      projectCapabilities.dockerWorkdir = dockerConfig.workdir;
+    }
+  }
+
+  // También detectar si .env tiene host.docker.internal (proyecto conecta a servicios vía Docker)
+  const envPath = path.join(folderPath, '.env');
+  if (fs.existsSync(envPath)) {
+    try {
+      const envContent = fs.readFileSync(envPath, 'utf-8');
+      projectCapabilities.dockerEnv = envContent.includes('host.docker.internal');
+      // Si hay host.docker.internal pero no encontramos docker-compose, intentar buscar
+      if (projectCapabilities.dockerEnv && !projectCapabilities.hasDocker) {
+        projectCapabilities.hasDocker = true;
+      }
+    } catch { /* ignore read errors */ }
+  }
+
   // Reset format on save al cambiar de proyecto
   projectCapabilities.formatOnSave = false;
 
@@ -500,6 +533,76 @@ function detectProjectCapabilities(folderPath) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('project:capabilities', projectCapabilities);
   }
+}
+
+// ── Docker helpers ──
+
+/**
+ * Buscar docker-compose.yml subiendo directorios desde folderPath.
+ * Retorna la ruta al archivo o null si no se encuentra.
+ */
+function findDockerCompose(folderPath) {
+  let dir = folderPath;
+  const root = path.parse(dir).root;
+  while (dir !== root) {
+    for (const name of ['docker-compose.yml', 'docker-compose.yaml']) {
+      const candidate = path.join(dir, name);
+      if (fs.existsSync(candidate)) return candidate;
+    }
+    dir = path.dirname(dir);
+  }
+  return null;
+}
+
+/**
+ * Parsear docker-compose.yml para extraer container_name y volumes del primer servicio.
+ * Retorna { containerName, workdir } o null.
+ */
+function parseDockerConfig(composePath, projectRoot) {
+  try {
+    const content = fs.readFileSync(composePath, 'utf-8');
+    const composeDir = path.dirname(composePath);
+
+    // Extraer container_name
+    const nameMatch = content.match(/container_name:\s*["']?([^\s"']+)/);
+    if (!nameMatch) return null;
+    const containerName = nameMatch[1];
+
+    // Extraer volumes para calcular workdir dentro del contenedor
+    // Buscar patrones como ./src:/var/www/html
+    const volumeRegex = /- ["']?(\.[^:]+):([^"'\s]+)/g;
+    let workdir = null;
+    let match;
+    while ((match = volumeRegex.exec(content)) !== null) {
+      const hostPath = path.resolve(composeDir, match[1]);
+      const containerPath = match[2];
+      // Si el projectRoot está dentro del volume source, calcular el workdir
+      if (projectRoot.startsWith(hostPath)) {
+        const relative = path.relative(hostPath, projectRoot);
+        workdir = relative ? path.posix.join(containerPath, relative) : containerPath;
+        break;
+      }
+    }
+
+    return workdir ? { containerName, workdir } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Ejecutar un comando en el proyecto. Si Docker está activo, lo ejecuta
+ * dentro del contenedor via `docker exec`.
+ * Devuelve { output, error, code }
+ */
+function runProjectCommand(cmd, args, cwd) {
+  const { dockerContainer, dockerWorkdir } = projectCapabilities;
+  if (dockerContainer && dockerWorkdir) {
+    // Ejecutar dentro del contenedor Docker
+    const dockerArgs = ['exec', '-w', dockerWorkdir, dockerContainer, cmd, ...args];
+    return runCommand('docker', dockerArgs, cwd);
+  }
+  return runCommand(cmd, args, cwd);
 }
 
 /**
@@ -1209,10 +1312,23 @@ ipcMain.handle('php:format', async (event, filePath) => {
   if (!projectCapabilities.projectRoot) return { error: 'No project open' };
 
   const root = projectCapabilities.projectRoot;
+  const { dockerContainer, dockerWorkdir } = projectCapabilities;
+
   if (projectCapabilities.hasPint) {
+    if (dockerContainer && dockerWorkdir) {
+      // Convertir ruta local a ruta dentro del contenedor
+      const relative = path.relative(root, filePath);
+      const containerFile = path.posix.join(dockerWorkdir, relative);
+      return runProjectCommand('vendor/bin/pint', [containerFile, '--no-interaction'], root);
+    }
     const pintBin = path.join(root, 'vendor', 'bin', 'pint');
     return runCommand(pintBin, [filePath, '--no-interaction'], root);
   } else if (projectCapabilities.hasCsFixer) {
+    if (dockerContainer && dockerWorkdir) {
+      const relative = path.relative(root, filePath);
+      const containerFile = path.posix.join(dockerWorkdir, relative);
+      return runProjectCommand('vendor/bin/php-cs-fixer', ['fix', containerFile, '--no-interaction', '--quiet'], root);
+    }
     const fixerBin = path.join(root, 'vendor', 'bin', 'php-cs-fixer');
     return runCommand(fixerBin, ['fix', filePath, '--no-interaction', '--quiet'], root);
   }
@@ -1229,6 +1345,11 @@ ipcMain.on('php:toggleFormatOnSave', (event, enabled) => {
 ipcMain.handle('phpunit:run', async (event, args) => {
   if (!projectCapabilities.projectRoot) return { error: 'No project open' };
   const root = projectCapabilities.projectRoot;
+  const { dockerContainer, dockerWorkdir } = projectCapabilities;
+  if (dockerContainer && dockerWorkdir) {
+    const cmdArgs = [...(args || []), '--colors=always'];
+    return runProjectCommand('vendor/bin/phpunit', cmdArgs, root);
+  }
   const phpunitBin = path.join(root, 'vendor', 'bin', 'phpunit');
   const cmdArgs = [...(args || []), '--colors=always'];
   return runCommand(phpunitBin, cmdArgs, root);
@@ -1247,13 +1368,25 @@ function getDbConfig() {
   return { config: db.getConnectionConfig(env) };
 }
 
-ipcMain.handle('db:getConfig', async () => {
+// Helper: obtener config de DB ajustada para ejecución local.
+// Si el .env usa host.docker.internal (hostname Docker→host), lo reemplaza
+// por 127.0.0.1 ya que desde la máquina local es equivalente.
+function getLocalDbConfig() {
   const { error, config: cfg } = getDbConfig();
+  if (error) return { error };
+  if (cfg.host === 'host.docker.internal') {
+    cfg.host = '127.0.0.1';
+  }
+  return { config: cfg };
+}
+
+ipcMain.handle('db:getConfig', async () => {
+  const { error, config: cfg } = getLocalDbConfig();
   return error ? { error } : cfg;
 });
 
 ipcMain.handle('db:getTables', async () => {
-  const { error, config: cfg } = getDbConfig();
+  const { error, config: cfg } = getLocalDbConfig();
   if (error) return { error };
 
   const sql = cfg.connection === 'pgsql'
@@ -1266,7 +1399,7 @@ ipcMain.handle('db:getTables', async () => {
 });
 
 ipcMain.handle('db:getColumns', async (event, tableName) => {
-  const { error, config: cfg } = getDbConfig();
+  const { error, config: cfg } = getLocalDbConfig();
   if (error) return { error };
 
   const safeName = db.sanitizeValue(tableName);
@@ -1292,7 +1425,7 @@ ipcMain.handle('db:getColumns', async (event, tableName) => {
 });
 
 ipcMain.handle('db:query', async (event, tableName, column, operator, value, limit) => {
-  const { error, config: cfg } = getDbConfig();
+  const { error, config: cfg } = getLocalDbConfig();
   if (error) return { error };
 
   const safeTable = db.sanitizeIdentifier(tableName);
@@ -1329,7 +1462,7 @@ ipcMain.handle('db:query', async (event, tableName, column, operator, value, lim
 });
 
 ipcMain.handle('db:update', async (event, tableName, pkColumn, pkValue, column, newValue) => {
-  const { error, config: cfg } = getDbConfig();
+  const { error, config: cfg } = getLocalDbConfig();
   if (error) return { error };
 
   const safeTable = db.sanitizeIdentifier(tableName);
@@ -1410,7 +1543,7 @@ ipcMain.handle('laravel:routeList', async (event) => {
   if (!projectCapabilities.projectRoot || !projectCapabilities.hasArtisan) {
     return { error: 'Not a Laravel project' };
   }
-  return runCommand('php', ['artisan', 'route:list', '--json', '--no-interaction'], projectCapabilities.projectRoot);
+  return runProjectCommand('php', ['artisan', 'route:list', '--json', '--no-interaction'], projectCapabilities.projectRoot);
 });
 
 // ────────────────────────────────────────────
@@ -1435,7 +1568,7 @@ ipcMain.handle('composer:exec', async (event, subcommand, args) => {
   if (!cmdArgs.includes('--ansi') && !cmdArgs.includes('--no-ansi')) {
     cmdArgs.push('--ansi');
   }
-  return runCommand('composer', cmdArgs, projectCapabilities.projectRoot);
+  return runProjectCommand('composer', cmdArgs, projectCapabilities.projectRoot);
 });
 
 // Ejecutar comando de Artisan
@@ -1450,7 +1583,7 @@ ipcMain.handle('artisan:exec', async (event, subcommand, args) => {
   if (!cmdArgs.includes('--ansi') && !cmdArgs.includes('--no-ansi')) {
     cmdArgs.push('--ansi');
   }
-  return runCommand('php', cmdArgs, projectCapabilities.projectRoot);
+  return runProjectCommand('php', cmdArgs, projectCapabilities.projectRoot);
 });
 
 // ────────────────────────────────────────────
