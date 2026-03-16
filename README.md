@@ -171,10 +171,12 @@ Automatically detected when `artisan` is present. Native macOS menu with:
 
 ### Database Viewer
 Accessible from the sidebar action bar or View menu. Reads database credentials from the project's `.env` file and connects via the `mysql` or `psql` CLI:
+- **Multi-database support** — auto-detects all database connections in the `.env` file. Supports `DB_DATABASE` (default), `DB_{PREFIX}_DATABASE` (e.g. `DB_ADMIN_DATABASE`), and `DB_DATABASE_{SUFFIX}` (e.g. `DB_DATABASE_BLOG`). Each database is shown as a collapsible section with its own connection info and table count. Per-connection credentials are resolved automatically (e.g. `DB_ADMIN_HOST`, `DB_ADMIN_USERNAME`) with fallback to the default credentials
 - Shows all tables with expandable columns (name, type, nullable, primary/foreign key indicators)
 - **Query panel** per table — select a column, pick an operator (`=`, `LIKE`, `IS NULL`, etc.), enter a value, and search. Or load all rows with one click
 - **Inline editing** — double-click any cell (except the primary key) to edit its value. Press Enter to save (`UPDATE` via CLI), Escape to cancel. Visual flash confirms the save
 - Results shown in a formatted table with sticky headers, hover highlighting, and NULL styling
+- Table search (`Cmd+F`) filters across all databases — sections without matches are hidden automatically
 - Supports MySQL and PostgreSQL
 
 ### Laravel Route List
@@ -235,7 +237,8 @@ mojavecode-php/
 │   ├── main/                        # Electron main process (Node.js)
 │   │   ├── main.js                  # Window, menus, IPC, pty, git, composer, artisan, db, search
 │   │   ├── preload.js               # Secure context bridge (renderer <-> main)
-│   │   └── lsp-manager.js           # Intelephense lifecycle (JSON-RPC 2.0 over stdio)
+│   │   ├── lsp-manager.js           # Intelephense lifecycle (JSON-RPC 2.0 over stdio)
+│   │   └── db-helper.js             # .env parsing, multi-database detection, SQL execution via CLI
 │   │
 │   └── renderer/                    # Electron renderer process (Chromium)
 │       ├── index.html               # App shell: titlebar, sidebar, editor area, dialogs, statusbar
@@ -285,7 +288,7 @@ Runs in Node.js. Handles everything that needs OS-level access:
 - **Dynamic native menus** — File, Edit, View, Terminal, Composer (if detected), Artisan (if detected, with Modules support), PHP (format on save + PHPUnit), Tema, Help
 - **Project detection** — scans the opened folder for `composer.json`, `artisan`, `pint.json`, `.php-cs-fixer.php`, `phpunit.xml`, and `nwidart/laravel-modules`. Rebuilds menus dynamically based on what's found
 - **IPC handlers** — filesystem, git (via `execFile`, safe from injection), PTY management, LSP lifecycle, search engine, symbol extraction, Composer/Artisan command execution, database queries, route list, PSR-4 namespace resolution, PHP formatting, PHPUnit execution, CPU monitoring, theme sync
-- **Database access** — parses `.env` for credentials, queries via `mysql`/`psql` CLI (no npm database drivers needed)
+- **Database access** — parses `.env` for credentials (auto-detects multiple database connections), queries via `mysql`/`psql` CLI (no npm database drivers needed)
 
 ### Preload (`preload.js`)
 
