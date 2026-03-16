@@ -2115,6 +2115,63 @@ body {
 .route-method-patch { background: rgba(247, 167, 62, 0.2); color: var(--accent-yellow); }
 .route-method-delete { background: rgba(232, 83, 36, 0.2); color: var(--accent-red); }
 
+/* ─── SEARCH BAR (Routes & Database) ─── */
+.route-search-bar,
+.db-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  background: var(--bg-dark);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+
+.route-search-bar input,
+.db-search-bar input {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  width: 180px;
+  padding: 3px 4px;
+}
+
+.route-search-bar input::placeholder,
+.db-search-bar input::placeholder {
+  color: var(--text-muted);
+}
+
+.route-search-count {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.route-search-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 2px;
+}
+
+.route-search-close:hover {
+  color: var(--text-primary);
+}
+
+.route-search-highlight {
+  background: rgba(247, 167, 62, 0.35);
+  color: var(--accent-yellow);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
 .route-raw-output {
   padding: 12px 16px;
   font-family: var(--font-mono);

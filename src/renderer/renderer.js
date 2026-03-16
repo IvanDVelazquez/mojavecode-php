@@ -199,10 +199,22 @@ function initEditor() {
     () => { if (state.activeTab) closeTab(state.activeTab.path); }
   );
 
-  // Cmd+F: Find in file (Monaco built-in)
+  // Cmd+F: Find in file (Monaco built-in) o filter en Routes
   state.editor.addCommand(
     monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyF,
-    () => state.editor.getAction('actions.find').run()
+    () => {
+      if (state.activeTab?.path === '__route-list__') {
+        const rc = document.getElementById('route-list-container');
+        if (rc?._showRouteSearch) rc._showRouteSearch();
+        return;
+      }
+      if (state.activeTab?.path === '__db-viewer__') {
+        const dc = document.getElementById('db-viewer-container');
+        if (dc?._showDbSearch) dc._showDbSearch();
+        return;
+      }
+      state.editor.getAction('actions.find').run();
+    }
   );
 
   // Cmd+H: Find & Replace (Monaco built-in)
@@ -2004,6 +2016,16 @@ function initEventListeners() {
     if (mod && e.key === 'b') { e.preventDefault(); toggleSidebar(); }
     if (mod && e.key === '`') { e.preventDefault(); toggleTerminal(); }
     if (mod && e.key === 'p') { e.preventDefault(); toggleQuickOpen(); }
+    if (mod && !e.shiftKey && e.key === 'f' && state.activeTab?.path === '__route-list__') {
+      e.preventDefault();
+      const rc = document.getElementById('route-list-container');
+      if (rc?._showRouteSearch) rc._showRouteSearch();
+    }
+    if (mod && !e.shiftKey && e.key === 'f' && state.activeTab?.path === '__db-viewer__') {
+      e.preventDefault();
+      const dc = document.getElementById('db-viewer-container');
+      if (dc?._showDbSearch) dc._showDbSearch();
+    }
     if (mod && e.shiftKey && e.key === 'F') { e.preventDefault(); showSearchPanel(); }
     if (mod && e.key === 't') { e.preventDefault(); toggleSymbolSearch(); }
     if (mod && e.key === 'w') { e.preventDefault(); if (state.activeTab) closeTab(state.activeTab.path); }
@@ -2852,6 +2874,11 @@ async function loadDbTables() {
       <span class="db-header-title">${escapeHtml(config.database)}</span>
       <span class="db-header-host">${escapeHtml(config.connection)}://${escapeHtml(config.host)}:${config.port}</span>
       <span class="db-header-count">${result.tables.length} tables</span>
+      <div class="db-search-bar" id="db-search-bar" style="display:none">
+        <input id="db-search-input" type="text" placeholder="Filter tables..." autocomplete="off" spellcheck="false" />
+        <span id="db-search-count" class="route-search-count"></span>
+        <button id="db-search-close" class="route-search-close" title="Close (Esc)">&times;</button>
+      </div>
     </div>
     <div class="db-table-list">`;
 
@@ -2986,6 +3013,93 @@ async function loadDbTables() {
       }
     });
   });
+
+  // Search/filter en tablas (Cmd+F)
+  initDbSearch(container, result.tables.length);
+}
+
+function initDbSearch(container, totalCount) {
+  const searchBar = document.getElementById('db-search-bar');
+  const searchInput = document.getElementById('db-search-input');
+  const searchCount = document.getElementById('db-search-count');
+  const searchClose = document.getElementById('db-search-close');
+  if (!searchBar || !searchInput) return;
+
+  const groups = container.querySelectorAll('.db-table-group');
+
+  function showDbSearch() {
+    searchBar.style.display = 'flex';
+    searchInput.focus();
+    searchInput.select();
+  }
+
+  function hideDbSearch() {
+    searchBar.style.display = 'none';
+    searchInput.value = '';
+    searchCount.textContent = '';
+    groups.forEach((g) => {
+      g.style.display = '';
+      // Limpiar highlights
+      const nameEl = g.querySelector('.db-table-name');
+      if (nameEl) {
+        nameEl.querySelectorAll('.route-search-highlight').forEach((hl) => {
+          hl.replaceWith(document.createTextNode(hl.textContent));
+        });
+        nameEl.normalize();
+      }
+    });
+    const headerCount = container.querySelector('.db-header-count');
+    if (headerCount) headerCount.textContent = `${totalCount} tables`;
+  }
+
+  function filterTables() {
+    const query = searchInput.value.trim().toLowerCase();
+    if (!query) {
+      hideDbSearch();
+      searchBar.style.display = 'flex';
+      searchInput.focus();
+      return;
+    }
+
+    let visible = 0;
+    groups.forEach((g) => {
+      const nameEl = g.querySelector('.db-table-name');
+      const tableName = nameEl?.textContent || '';
+      const matches = tableName.toLowerCase().includes(query);
+
+      g.style.display = matches ? '' : 'none';
+      if (matches) visible++;
+
+      // Highlight
+      if (nameEl) {
+        nameEl.querySelectorAll('.route-search-highlight').forEach((hl) => {
+          hl.replaceWith(document.createTextNode(hl.textContent));
+        });
+        nameEl.normalize();
+        if (matches) {
+          const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+          nameEl.innerHTML = escapeHtml(tableName).replace(regex, '<span class="route-search-highlight">$1</span>');
+        }
+      }
+    });
+
+    searchCount.textContent = `${visible} / ${totalCount}`;
+    const headerCount = container.querySelector('.db-header-count');
+    if (headerCount) headerCount.textContent = `${visible} / ${totalCount} tables`;
+  }
+
+  searchInput.addEventListener('input', filterTables);
+
+  searchInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      hideDbSearch();
+    }
+  });
+
+  searchClose.addEventListener('click', () => hideDbSearch());
+
+  container._showDbSearch = showDbSearch;
 }
 
 async function dbRunQuery(tableName, column, operator, value, limit, resultsDiv) {
@@ -3199,6 +3313,11 @@ async function loadRouteList() {
   let html = `
     <div class="route-header">
       <span class="route-header-count">${routes.length} routes</span>
+      <div class="route-search-bar" id="route-search-bar" style="display:none">
+        <input id="route-search-input" type="text" placeholder="Filter routes..." autocomplete="off" spellcheck="false" />
+        <span id="route-search-count" class="route-search-count"></span>
+        <button id="route-search-close" class="route-search-close" title="Close (Esc)">&times;</button>
+      </div>
     </div>
     <div class="route-table">
       <div class="route-table-head">
@@ -3246,6 +3365,105 @@ async function loadRouteList() {
       openFile(fullPath, fileName);
     });
   });
+
+  // Search/filter en rutas (Cmd+F)
+  initRouteSearch(container);
+}
+
+function initRouteSearch(container) {
+  const searchBar = document.getElementById('route-search-bar');
+  const searchInput = document.getElementById('route-search-input');
+  const searchCount = document.getElementById('route-search-count');
+  const searchClose = document.getElementById('route-search-close');
+  if (!searchBar || !searchInput) return;
+
+  const rows = container.querySelectorAll('.route-row');
+
+  function showRouteSearch() {
+    searchBar.style.display = 'flex';
+    searchInput.focus();
+    searchInput.select();
+  }
+
+  function hideRouteSearch() {
+    searchBar.style.display = 'none';
+    searchInput.value = '';
+    searchCount.textContent = '';
+    rows.forEach((row) => {
+      row.style.display = 'flex';
+      // Limpiar highlights
+      row.querySelectorAll('.route-search-highlight').forEach((hl) => {
+        hl.replaceWith(document.createTextNode(hl.textContent));
+      });
+    });
+    // Actualizar contador del header
+    const headerCount = container.querySelector('.route-header-count');
+    if (headerCount) headerCount.textContent = `${rows.length} routes`;
+  }
+
+  function filterRoutes() {
+    const query = searchInput.value.trim().toLowerCase();
+    if (!query) {
+      hideRouteSearch();
+      searchBar.style.display = 'flex';
+      searchInput.focus();
+      return;
+    }
+
+    let visible = 0;
+    rows.forEach((row) => {
+      // Buscar en URI, Name y Action (no en Method badges)
+      const uri = row.querySelector('.route-col-uri');
+      const name = row.querySelector('.route-col-name');
+      const action = row.querySelector('.route-col-action');
+      const method = row.querySelector('.route-col-method');
+
+      const texts = [
+        uri?.textContent || '',
+        name?.textContent || '',
+        action?.textContent || '',
+        method?.textContent || '',
+      ];
+
+      const matches = texts.some((t) => t.toLowerCase().includes(query));
+      row.style.display = matches ? 'flex' : 'none';
+      if (matches) visible++;
+
+      // Highlight matches en las columnas de texto
+      [uri, name, action].forEach((col) => {
+        if (!col) return;
+        const original = col.textContent;
+        // Limpiar highlights previos
+        col.querySelectorAll('.route-search-highlight').forEach((hl) => {
+          hl.replaceWith(document.createTextNode(hl.textContent));
+        });
+        col.normalize();
+        if (!matches || !original.toLowerCase().includes(query)) return;
+
+        // Aplicar highlight
+        const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+        col.innerHTML = escapeHtml(original).replace(regex, '<span class="route-search-highlight">$1</span>');
+      });
+    });
+
+    searchCount.textContent = `${visible} / ${rows.length}`;
+    const headerCount = container.querySelector('.route-header-count');
+    if (headerCount) headerCount.textContent = `${visible} / ${rows.length} routes`;
+  }
+
+  searchInput.addEventListener('input', filterRoutes);
+
+  searchInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      hideRouteSearch();
+    }
+  });
+
+  searchClose.addEventListener('click', () => hideRouteSearch());
+
+  // Exponer la función para que Cmd+F pueda abrirla
+  container._showRouteSearch = showRouteSearch;
 }
 
 function initDbAndRoutes() {
