@@ -45,6 +45,20 @@ contextBridge.exposeInMainWorld('api', {
   writeFile: (filePath, content) => ipcRenderer.invoke('fs:writeFile', filePath, content),
   stat: (filePath) => ipcRenderer.invoke('fs:stat', filePath),
 
+  // ── File operations (context menu del file tree) ──
+  deleteFile: (targetPath) => ipcRenderer.invoke('fs:deleteFile', targetPath),
+  copyFile: (srcPath, destPath) => ipcRenderer.invoke('fs:copyFile', srcPath, destPath),
+
+  // ── Carpetas recientes ──
+  // Cuando el renderer abre una carpeta desde la welcome screen,
+  // avisa al main para que actualice el JSON de recientes y
+  // reconstruya el menú nativo (File > Open Recent).
+  notifyRecentFolder: (folderPath) => ipcRenderer.send('recent:opened', folderPath),
+
+  // ── Log Viewer (panel lateral de logs) ──
+  listLogs: () => ipcRenderer.invoke('fs:listLogs'),
+  readLogTail: (filePath, lines) => ipcRenderer.invoke('fs:readLogTail', filePath, lines),
+
   // ── Diálogos del SO ──
   openFolder: () => ipcRenderer.invoke('dialog:openFolder'),
   openFile: () => ipcRenderer.invoke('dialog:openFile'),
@@ -69,6 +83,11 @@ contextBridge.exposeInMainWorld('api', {
 
   // ── Menu events (main → renderer) ──
   onMenuSave: (callback) => ipcRenderer.on('menu:save', callback),
+  // Auto Save: el main avisa al renderer cuando el usuario activa/desactiva
+  // desde File > Auto Save. El renderer usa esto para activar el debounce.
+  onAutoSaveChanged: (callback) => {
+    ipcRenderer.on('menu:auto-save-changed', (event, enabled) => callback(enabled));
+  },
   onMenuSaveAs: (callback) => ipcRenderer.on('menu:save-as', callback),
   onMenuToggleSidebar: (callback) => ipcRenderer.on('menu:toggle-sidebar', callback),
   onMenuToggleTerminal: (callback) => ipcRenderer.on('menu:toggle-terminal', callback),
@@ -103,6 +122,8 @@ contextBridge.exposeInMainWorld('api', {
   gitPush: (cwd) => ipcRenderer.invoke('git:push', cwd),
   gitPull: (cwd) => ipcRenderer.invoke('git:pull', cwd),
   gitGraphLog: (cwd, limit) => ipcRenderer.invoke('git:graphLog', cwd, limit),
+  gitListBranches: (cwd) => ipcRenderer.invoke('git:listBranches', cwd),
+  gitCheckout: (cwd, branch) => ipcRenderer.invoke('git:checkout', cwd, branch),
 
   // ── LSP (Language Server Protocol) ──
   lspStart: (workspaceFolder) => ipcRenderer.invoke('lsp:start', workspaceFolder),
@@ -124,6 +145,9 @@ contextBridge.exposeInMainWorld('api', {
   onPhpunitRunAll: (callback) => ipcRenderer.on('phpunit:runAll', callback),
   onPhpunitRunFile: (callback) => ipcRenderer.on('phpunit:runFile', callback),
   onPhpunitRunMethod: (callback) => ipcRenderer.on('phpunit:runMethod', callback),
+
+  // ── Menu events: Git ──
+  onMenuGitCheckout: (callback) => ipcRenderer.on('menu:git-checkout', callback),
 
   // ── Menu events: DB & Routes ──
   onMenuDbViewer: (callback) => ipcRenderer.on('menu:db-viewer', callback),
@@ -147,6 +171,8 @@ contextBridge.exposeInMainWorld('api', {
   onMenuGoToSymbol: (callback) => ipcRenderer.on('menu:go-to-symbol', callback),
 
   // ── Composer & Artisan ──
+  composerCreateProject: (parentDir, projectName) => ipcRenderer.invoke('composer:createProject', parentDir, projectName),
+  chooseFolder: () => ipcRenderer.invoke('dialog:chooseFolder'),
   composerExec: (subcommand, args) => ipcRenderer.invoke('composer:exec', subcommand, args),
   artisanExec: (subcommand, args) => ipcRenderer.invoke('artisan:exec', subcommand, args),
   detectProject: (folderPath) => ipcRenderer.send('project:detect', folderPath),
@@ -154,6 +180,9 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('project:capabilities', (event, caps) => callback(caps));
   },
   // Composer menu events (main → renderer)
+  onComposerNewLaravel: (callback) => {
+    ipcRenderer.on('composer:new-laravel', callback);
+  },
   onComposerRun: (callback) => {
     ipcRenderer.on('composer:run', (event, cmd) => callback(cmd));
   },

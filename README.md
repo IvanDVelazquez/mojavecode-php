@@ -133,7 +133,7 @@ Electron-builder technically supports some cross-compilation scenarios, but `nod
 ### Editor Core
 - **Monaco Editor** — the same engine behind VS Code, with syntax highlighting for 30+ languages
 - **Two themes** — Mojave Dark (deep blues + sunset orange) and Mojave Light (warm sand + deep blue), switchable from the native macOS menu bar
-- **Tab management** — unsaved change warnings, modified indicators, multiple special tabs (terminal, git graph, diff, output, database, routes)
+- **Tab management** — unsaved change warnings, modified indicators, **drag & drop reordering**, multiple special tabs (terminal, git graph, diff, output, database, routes, logs)
 - **Diff view** — side-by-side comparison for staged and unstaged git changes
 - **Zoom** (`Cmd+=` / `Cmd+-` / `Cmd+0`) — adjusts editor font size from 8px to 40px with proportional line height. Percentage indicator in the status bar (click to reset). Persisted across sessions via localStorage
 - **Find & Replace** (`Cmd+H`)
@@ -152,7 +152,8 @@ Electron-builder technically supports some cross-compilation scenarios, but `nod
 - **PHPUnit runner** — run all tests, the current file, or the current method (detects `test_*` and `@test`) from the PHP menu. Results shown in the Output tab
 
 ### Composer Integration
-Automatically detected when `composer.json` is present. Native macOS menu with:
+The Composer menu is always visible in the menu bar. Project-specific commands appear when `composer.json` is detected:
+- **New Laravel Project...** — always available. Creates a new Laravel project with `composer create-project`: prompts for the project name, lets you choose the destination folder, runs the installation (with 10-minute timeout for slow connections), and opens the new project automatically on completion
 - **Install** / **Update** — one-click execution
 - **Require** / **Require Dev** / **Remove** — input dialog for package name
 - **Dump Autoload**
@@ -185,6 +186,17 @@ Accessible from the sidebar action bar or View menu. Executes `php artisan route
 - Color-coded method badges: GET (green), POST (blue), PUT/PATCH (yellow), DELETE (red)
 - Click on a controller action to open the PHP file directly (PSR-4 namespace-to-path resolution)
 
+### Log Viewer
+Accessible from the sidebar action bar. Reads all log files from `storage/logs` (not just `laravel.log`):
+- **Sidebar panel** — replaces the file tree (same pattern as Git and Search panels), lists all log files sorted by name
+- **Formatted view** — parses Laravel log format (`[timestamp] env.LEVEL: message`) into structured, color-coded entries
+- **Log level badges** — ERROR (red), WARNING (yellow), INFO (blue), DEBUG (gray)
+- **Collapsible stack traces** — click the toggle arrow to expand/collapse
+- **JSON pretty-printing** — embedded JSON objects in log messages are automatically detected and formatted with indentation
+- **Level filters** — filter by All, Error, Warning, Info, or Debug with one click
+- **Full-text search** — real-time filtering with highlighted matches across messages and stack traces. Combines with level filters
+- **Refresh button** — reload the current log without closing the tab
+
 ### Terminal
 - **Integrated terminal** powered by xterm.js + node-pty
 - Starts in the project root directory and resets when switching projects
@@ -195,13 +207,20 @@ Accessible from the sidebar action bar or View menu. Executes `php artisan route
 - **Source Control panel** — staged, unstaged, and untracked files with one-click stage/unstage/discard
 - **Commit** directly from the sidebar
 - **Push / Pull** — buttons in the git panel with visual feedback (syncing state and error messages)
+- **Branch picker** (`Cmd+Shift+B`) — command palette-style branch switcher with instant search. Shows local and remote branches, with the current branch and main/master always at the top. Also accessible by clicking the branch name in the status bar. Remote-only branches are marked and automatically create a local tracking branch on checkout
+- **Auto-refresh branch** — the status bar branch name and git panel update automatically when you run git commands (checkout, switch, etc.) in the integrated terminal
+- **Status bar sync** — Pull (↓) and Push (↑) buttons next to the branch name in the status bar for quick one-click sync, with spin animation while executing
 - **Git Graph** — SVG visualization of commit history, branches, and tags
 - **Diff view** — opens when clicking files in the git panel
 
 ### UI & Navigation
-- **Sidebar action bar** with quick access to Search, Terminal, Git, Database, and Routes
-- **File tree** with lazy-loading and material file icons
+- **Sidebar action bar** with quick access to Search, Terminal, Git, Database, Routes, and Logs
+- **File tree** with lazy-loading, material file icons, **auto-reveal** (activating a tab expands and scrolls to the file in the tree, like VS Code's "Reveal in Side Bar"), and **right-click context menu** (Copy Path, Copy, Paste, Delete)
+- **Resizable sidebar** — drag the right edge to adjust width (150px–600px)
+- **Breadcrumb bar** — shows the relative path of the active file between the tab bar and the editor, making it easy to distinguish files with the same name in different directories
 - **Collapsible sidebar sections** — outline fills available space when file tree is collapsed
+- **Recent folders** — last 5 opened folders shown on the welcome screen for one-click access, and in File > Open Recent in the native menu bar. Persisted across sessions
+- **Auto Save** — toggle from File > Auto Save. Saves automatically 1 second after the last keystroke
 - **Error Log** — captures `console.error`, unhandled errors, and rejected promises. Red badge in status bar, dedicated tab with clear button
 - **System monitor** — CPU and RAM usage in the status bar
 
@@ -219,6 +238,7 @@ Accessible from the sidebar action bar or View menu. Executes `php artisan route
 | `Cmd+S` | Save file |
 | `Cmd+Shift+S` | Save As |
 | `Cmd+W` | Close active tab |
+| `Cmd+Shift+B` | Switch Git branch |
 | `Cmd+B` | Toggle sidebar |
 | `Cmd+`` ` | Toggle terminal |
 | `Cmd+H` | Find & Replace |
@@ -272,6 +292,7 @@ mojavecode-php/
 │  │ - DB queries (CLI) │       │ - Quick Open           │ │
 │  │ - PHPUnit/Pint     │       │ - DB Viewer            │ │
 │  │ - PSR-4 resolver   │       │ - Route List           │ │
+│  │ - Log reader       │       │ - Log Viewer           │ │
 │  │ - Search engine    │       │ - Theme Switcher       │ │
 │  │ - Dialogs          │       │ - Error Log            │ │
 │  └────────────────────┘       └────────────────────────┘ │
@@ -285,9 +306,9 @@ mojavecode-php/
 Runs in Node.js. Handles everything that needs OS-level access:
 
 - **Window management** — frameless BrowserWindow with custom titlebar
-- **Dynamic native menus** — File, Edit, View, Terminal, Composer (if detected), Artisan (if detected, with Modules support), PHP (format on save + PHPUnit), Tema, Help
+- **Dynamic native menus** — File, Edit, View, Terminal, Git, Composer (always visible, project commands conditional), Artisan (if detected, with Modules support), PHP (format on save + PHPUnit), Tema, Help
 - **Project detection** — scans the opened folder for `composer.json`, `artisan`, `pint.json`, `.php-cs-fixer.php`, `phpunit.xml`, and `nwidart/laravel-modules`. Rebuilds menus dynamically based on what's found
-- **IPC handlers** — filesystem, git (via `execFile`, safe from injection), PTY management, LSP lifecycle, search engine, symbol extraction, Composer/Artisan command execution, database queries, route list, PSR-4 namespace resolution, PHP formatting, PHPUnit execution, CPU monitoring, theme sync
+- **IPC handlers** — filesystem (read, write, delete, copy), git (via `execFile`, safe from injection), PTY management, LSP lifecycle, search engine, symbol extraction, Composer/Artisan command execution, database queries, route list, log file reading, PSR-4 namespace resolution, PHP formatting, PHPUnit execution, CPU monitoring, auto-save, theme sync
 - **Database access** — parses `.env` for credentials (auto-detects multiple database connections), queries via `mysql`/`psql` CLI (no npm database drivers needed)
 
 ### Preload (`preload.js`)
@@ -296,7 +317,7 @@ Secure bridge via `contextBridge.exposeInMainWorld`. Every IPC channel is explic
 
 ### Renderer (`renderer.js`)
 
-Single-page application with centralized mutable state. Organized in numbered sections covering editor initialization, terminal, file tree, tabs, save, language detection, UI toggles, git panel, theme switching, error log, quick open, search panel, symbol search, database viewer, route list, Composer/Artisan integration, PHP tools, and system monitoring.
+Single-page application with centralized mutable state. Organized in numbered sections covering editor initialization, terminal (with auto git branch refresh), file tree (with context menu and auto-reveal), tabs (with drag & drop reordering), save (with auto-save), breadcrumb bar, language detection, UI toggles (sidebar resize), git panel, branch picker (command palette-style branch switcher), theme switching, error log, quick open, search panel, symbol search, database viewer, route list, log viewer (formatted with search and filters), Composer/Artisan integration (including New Laravel Project), PHP tools, and system monitoring.
 
 ### LSP Client (`lsp-client.js`)
 
@@ -345,7 +366,6 @@ No additional runtime dependencies for database access (uses `mysql`/`psql` CLI)
 - LSP only supports PHP (Intelephense). Other languages get syntax highlighting but no autocomplete or diagnostics
 - No file watcher — external file changes aren't detected until the file is reopened
 - No settings UI — tab size and other preferences are hardcoded (font size is adjustable via zoom)
-- Single window only
 - Database viewer requires `mysql` or `psql` CLI installed locally
 - No Xdebug integration (breakpoints/debugging)
 
@@ -356,10 +376,9 @@ No additional runtime dependencies for database access (uses `mysql`/`psql` CLI)
 ### Planned
 - [ ] Xdebug integration (breakpoints and step debugging)
 - [ ] `.env` viewer with syntax highlighting and hidden secrets
-- [ ] Docker-aware command execution (run Composer/Artisan/PHPUnit inside containers)
 - [ ] File watcher for external changes
 - [ ] Settings/preferences UI
-- [ ] Multiple windows
+- [ ] Multiple terminal instances
 
 ---
 

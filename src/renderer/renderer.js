@@ -47,6 +47,8 @@ const state = {
   terminalFitAddon: null,
   terminalResizeObserver: null, // ResizeObserver del terminal container
   formatOnSave: false,         // PHP format on save (desactivado por defecto)
+  autoSave: false,             // Auto-save (desactivado por defecto)
+  autoSaveTimer: null,         // Timer del debounce de auto-save
   zoom: {
     fontSize: 14,              // Tamaño actual — se restaura desde localStorage al arrancar
     defaultFontSize: 14,       // Referencia para calcular el % del indicador
@@ -179,6 +181,14 @@ function initEditor() {
       clearTimeout(modelHighlightTimer);
       modelHighlightTimer = setTimeout(highlightModelCalls, 300);
     }
+    // Auto-save: si está activado (File > Auto Save), esperamos 1 segundo
+    // después del último cambio para guardar. El clearTimeout hace que
+    // si el usuario sigue escribiendo, el timer se reinicie cada vez
+    // (debounce), así no guardamos en medio de una edición rápida.
+    if (state.autoSave && state.activeTab?.model) {
+      clearTimeout(state.autoSaveTimer);
+      state.autoSaveTimer = setTimeout(() => saveCurrentFile(), 1000);
+    }
   });
 
   // Keybinding: Ctrl+S → guardar archivo
@@ -257,6 +267,7 @@ function initEditor() {
 
   // Mostrar welcome screen (el editor se oculta hasta abrir un archivo)
   document.getElementById('welcome').style.display = 'flex';
+  document.getElementById('editor-container').style.display = 'none';
 }
 
 // ┌──────────────────────────────────────────────────┐
@@ -288,6 +299,48 @@ function editorZoomReset() {
 function updateZoomIndicator() {
   const pct = Math.round((state.zoom.fontSize / state.zoom.defaultFontSize) * 100);
   document.getElementById('status-zoom').textContent = `${pct}%`;
+}
+
+// ┌──────────────────────────────────────────────────┐
+// │  1b. GIT BRANCH AUTO-REFRESH                     │
+// │  Detecta cambios de rama desde la terminal.      │
+// │                                                  │
+// │  Cuando el usuario ejecuta comandos en la        │
+// │  terminal (ej: git checkout, git switch), la     │
+// │  data del pty dispara un check con debounce.     │
+// │  Si la rama cambió, actualiza el status bar y    │
+// │  refresca el panel de git para mantener la UI    │
+// │  sincronizada con el estado real del repo.       │
+// └──────────────────────────────────────────────────┘
+let _gitBranchRefreshTimer = null;
+let _lastKnownBranch = null;
+
+function scheduleGitBranchRefresh() {
+  if (!state.currentFolder) return;
+
+  // Cancelar check previo si el usuario sigue escribiendo/ejecutando
+  if (_gitBranchRefreshTimer) clearTimeout(_gitBranchRefreshTimer);
+
+  // Esperar 500ms de "silencio" antes de consultar la rama.
+  // Esto evita hacer decenas de llamadas git mientras la terminal
+  // está imprimiendo output de un comando largo (npm install, etc.)
+  _gitBranchRefreshTimer = setTimeout(async () => {
+    _gitBranchRefreshTimer = null;
+
+    const result = await window.api.gitBranch(state.currentFolder);
+    if (result.error) return;
+
+    const branch = result.output;
+
+    // Solo actualizar la UI si la rama realmente cambió.
+    // Sin este guard, cada Enter en la terminal provocaría
+    // un repaint innecesario del status bar y del git panel.
+    if (branch !== _lastKnownBranch) {
+      _lastKnownBranch = branch;
+      document.getElementById('status-branch').textContent = `⎇ ${branch}`;
+      if (typeof refreshGitStatus === 'function') refreshGitStatus();
+    }
+  }, 500);
 }
 
 // ┌──────────────────────────────────────────────────┐
@@ -369,6 +422,8 @@ async function initTerminal() {
   // pty → xterm (output)
   window.api.onPtyData((data) => {
     state.terminal.write(data);
+    // Detectar cuando un comando terminó (prompt regresó) y refrescar la rama git
+    scheduleGitBranchRefresh();
   });
 
   // xterm → pty (input del usuario)
@@ -396,6 +451,78 @@ async function initTerminal() {
 }
 
 // ┌──────────────────────────────────────────────────┐
+// │  CARPETAS RECIENTES                               │
+// │  Guarda las últimas 5 carpetas abiertas en        │
+// │  localStorage para mostrarlas en la welcome        │
+// │  screen al iniciar la app.                        │
+// └──────────────────────────────────────────────────┘
+
+const RECENT_FOLDERS_KEY = 'mojavecode:recentFolders';
+const MAX_RECENT_FOLDERS = 5;
+
+/**
+ * Guardar una carpeta en la lista de recientes.
+ * La mueve al tope si ya existía, y recorta a MAX_RECENT_FOLDERS.
+ */
+function saveRecentFolder(folderPath) {
+  let recent = getRecentFolders();
+  // Si ya existe, sacarla para ponerla al tope
+  recent = recent.filter((p) => p !== folderPath);
+  recent.unshift(folderPath);
+  // Recortar a las últimas 5
+  if (recent.length > MAX_RECENT_FOLDERS) recent.length = MAX_RECENT_FOLDERS;
+  localStorage.setItem(RECENT_FOLDERS_KEY, JSON.stringify(recent));
+}
+
+function getRecentFolders() {
+  try {
+    return JSON.parse(localStorage.getItem(RECENT_FOLDERS_KEY)) || [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Renderizar la lista de carpetas recientes en la welcome screen.
+ * Cada item es clickeable y abre la carpeta directamente.
+ */
+function renderRecentFolders() {
+  const container = document.getElementById('welcome-recent');
+  if (!container) return;
+  const recent = getRecentFolders();
+
+  if (!recent.length) {
+    container.innerHTML = '';
+    return;
+  }
+
+  let html = '<div class="recent-title">Recent</div><div class="recent-list">';
+  for (const folderPath of recent) {
+    const name = folderPath.split(/[/\\]/).pop();
+    // Ruta padre para mostrar contexto (ej: ~/projects)
+    const parent = folderPath.substring(0, folderPath.lastIndexOf('/'));
+    const shortParent = parent.replace(/^\/Users\/[^/]+/, '~');
+    html += `<div class="recent-item" data-path="${escapeAttr(folderPath)}" title="${escapeAttr(folderPath)}">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+      <div class="recent-item-text">
+        <span class="recent-item-name">${escapeHtml(name)}</span>
+        <span class="recent-item-path">${escapeHtml(shortParent)}</span>
+      </div>
+    </div>`;
+  }
+  html += '</div>';
+  container.innerHTML = html;
+
+  // Click en una carpeta reciente → abrirla
+  container.querySelectorAll('.recent-item').forEach((item) => {
+    item.addEventListener('click', () => {
+      const path = item.dataset.path;
+      loadFileTree(path);
+    });
+  });
+}
+
+// ┌──────────────────────────────────────────────────┐
 // │  3. FILE TREE                                    │
 // │  Explorador de archivos con lazy-loading: solo   │
 // │  carga el contenido de una carpeta al expandir.  │
@@ -406,6 +533,11 @@ async function loadFileTree(folderPath) {
   state.currentFolder = folderPath;
   quickOpen.allFiles = []; // Invalidar cache de Quick Open
   symbolSearch.allSymbols = []; // Invalidar cache de Symbol Search
+
+  // Guardar en recientes (últimas 5 carpetas) en localStorage
+  // y notificar al main process para que actualice el menú nativo.
+  saveRecentFolder(folderPath);
+  window.api.notifyRecentFolder(folderPath);
 
   // Cerrar todos los tabs abiertos
   closeAllTabs();
@@ -432,6 +564,7 @@ async function loadFileTree(folderPath) {
   window.api.gitBranch(folderPath).then((result) => {
     if (!result.error) {
       document.getElementById('status-branch').textContent = `⎇ ${result.output}`;
+      _lastKnownBranch = result.output;
     }
   });
 
@@ -496,6 +629,252 @@ async function renderTreeLevel(dirPath, parentEl, depth) {
 
 function getFolderIcon() {
   return '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:100%"><path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z" fill="#F7A73E"/></svg>';
+}
+
+// ┌──────────────────────────────────────────────────┐
+// │  CONTEXT MENU DEL FILE TREE                      │
+// │  Click derecho sobre archivos/carpetas para:     │
+// │  copiar ruta, copiar, pegar, eliminar.           │
+// │                                                  │
+// │  El menú es un <div> posicionado con position:   │
+// │  fixed que aparece en las coordenadas del click. │
+// │  Se oculta al hacer click en cualquier otro lado.│
+// └──────────────────────────────────────────────────┘
+
+// Estado del portapapeles interno del file tree.
+// Cuando el usuario hace "Copy" guardamos la ruta acá,
+// y al hacer "Paste" la usamos como origen de la copia.
+const treeContextState = { copiedPath: null, copiedIsDir: false };
+
+function initTreeContextMenu() {
+  const menu = document.getElementById('tree-context-menu');
+  const fileTree = document.getElementById('file-tree');
+
+  // Cerrar el menú al hacer click en cualquier parte
+  document.addEventListener('click', () => {
+    menu.style.display = 'none';
+  });
+
+  // Abrir menú contextual al hacer click derecho sobre un item del árbol
+  fileTree.addEventListener('contextmenu', (e) => {
+    const item = e.target.closest('.tree-item');
+    if (!item) return;
+    e.preventDefault();
+
+    const targetPath = item.dataset.path;
+    menu.dataset.targetPath = targetPath;
+
+    // "Paste" solo está habilitado si hay algo copiado
+    const pasteItem = menu.querySelector('[data-action="paste-file"]');
+    pasteItem.classList.toggle('context-menu-disabled', !treeContextState.copiedPath);
+
+    // Posicionar el menú donde hizo click el usuario
+    menu.style.display = 'block';
+    menu.style.left = `${e.clientX}px`;
+    menu.style.top = `${e.clientY}px`;
+
+    // Si el menú se sale de la pantalla, reposicionar
+    const rect = menu.getBoundingClientRect();
+    if (rect.right > window.innerWidth) menu.style.left = `${window.innerWidth - rect.width - 4}px`;
+    if (rect.bottom > window.innerHeight) menu.style.top = `${window.innerHeight - rect.height - 4}px`;
+  });
+
+  // Manejar las acciones del menú
+  menu.addEventListener('click', async (e) => {
+    const action = e.target.closest('.context-menu-item')?.dataset.action;
+    if (!action) return;
+    const targetPath = menu.dataset.targetPath;
+    menu.style.display = 'none';
+
+    // ── Copy Path: copiar la ruta absoluta al clipboard del SO ──
+    if (action === 'copy-path') {
+      navigator.clipboard.writeText(targetPath);
+    }
+
+    // ── Copy: guardar la ruta en el portapapeles interno ──
+    if (action === 'copy-file') {
+      treeContextState.copiedPath = targetPath;
+      const stat = await window.api.stat(targetPath);
+      treeContextState.copiedIsDir = stat?.isDirectory || false;
+    }
+
+    // ── Paste: copiar el archivo/carpeta al directorio seleccionado ──
+    if (action === 'paste-file') {
+      if (!treeContextState.copiedPath) return;
+      const srcPath = treeContextState.copiedPath;
+      const srcName = srcPath.split(/[/\\]/).pop();
+
+      // Si el destino es un archivo, pegar en su carpeta padre
+      const stat = await window.api.stat(targetPath);
+      const destDir = stat?.isDirectory ? targetPath : targetPath.substring(0, targetPath.lastIndexOf('/'));
+      let destPath = `${destDir}/${srcName}`;
+
+      // Si ya existe un archivo con ese nombre, agregar " - Copy"
+      const destStat = await window.api.stat(destPath);
+      if (destStat) {
+        const ext = srcName.includes('.') ? '.' + srcName.split('.').pop() : '';
+        const base = ext ? srcName.slice(0, -ext.length) : srcName;
+        destPath = `${destDir}/${base} - Copy${ext}`;
+      }
+
+      const result = await window.api.copyFile(srcPath, destPath);
+      if (result.error) {
+        alert(`Error copying: ${result.error}`);
+      } else {
+        refreshTreeParent(destDir);
+      }
+    }
+
+    // ── Delete: eliminar con confirmación ──
+    if (action === 'delete-file') {
+      const name = targetPath.split(/[/\\]/).pop();
+      if (!confirm(`Delete "${name}"? This cannot be undone.`)) return;
+
+      // Si el archivo está abierto en una pestaña, cerrarla primero
+      const openTab = state.openTabs.find((t) => t.path === targetPath);
+      if (openTab) closeTab(targetPath);
+
+      const result = await window.api.deleteFile(targetPath);
+      if (result.error) {
+        alert(`Error deleting: ${result.error}`);
+      } else {
+        const parentDir = targetPath.substring(0, targetPath.lastIndexOf('/'));
+        refreshTreeParent(parentDir);
+      }
+    }
+  });
+}
+
+/**
+ * Refrescar una carpeta en el file tree después de copiar/eliminar.
+ *
+ * Busca la carpeta padre en el árbol y simula un colapso + expansión
+ * para que se vuelvan a cargar los hijos desde disco (lazy load).
+ * Si no la encuentra (ej: la raíz), recarga todo el árbol.
+ */
+function refreshTreeParent(dirPath) {
+  const items = document.querySelectorAll('.tree-item');
+  for (const item of items) {
+    if (item.dataset.path === dirPath) {
+      const chevron = item.querySelector('.tree-chevron');
+      if (chevron && chevron.textContent === '▾') {
+        item.click();   // colapsar
+        setTimeout(() => item.click(), 50); // re-expandir
+      }
+      return;
+    }
+  }
+  // Fallback: recargar todo el árbol si no encontramos la carpeta
+  if (state.currentFolder) loadFileTree(state.currentFolder);
+}
+
+// ┌──────────────────────────────────────────────────┐
+// │  3b. REVEAL FILE IN TREE                         │
+// │  Expande las carpetas ancestro de un archivo y   │
+// │  hace scroll hasta él en el sidebar, similar al  │
+// │  "Reveal in Side Bar" de VS Code.                │
+// │                                                  │
+// │  Se ejecuta automáticamente al activar un tab    │
+// │  (abrir archivo nuevo o cambiar de pestaña).     │
+// │                                                  │
+// │  DESAFÍO TÉCNICO:                                │
+// │  El file tree usa lazy loading — las carpetas    │
+// │  cargan sus hijos desde disco recién al          │
+// │  expandirse. Entonces para revelar un archivo    │
+// │  en una carpeta profunda, necesitamos expandir   │
+// │  nivel por nivel, esperando a que cada readDir   │
+// │  termine y sus items aparezcan en el DOM antes   │
+// │  de continuar al siguiente nivel.                │
+// └──────────────────────────────────────────────────┘
+
+/**
+ * Revelar un archivo en el file tree.
+ *
+ * Ejemplo: para revelar /proyecto/app/Models/User.php necesita:
+ * 1. Verificar que "app" esté expandido (si no, click → esperar)
+ * 2. Verificar que "Models" esté expandido (si no, click → esperar)
+ * 3. Encontrar "User.php" en el DOM y hacer scroll
+ */
+async function revealFileInTree(filePath) {
+  if (!state.currentFolder || !filePath) return;
+  if (!filePath.startsWith(state.currentFolder)) return;
+
+  // Caso rápido: si el item ya está renderizado en el DOM,
+  // solo necesitamos hacer scroll (la carpeta ya estaba expandida)
+  const existing = document.querySelector(`.tree-item[data-path="${CSS.escape(filePath)}"]`);
+  if (existing) {
+    existing.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    return;
+  }
+
+  // Descomponer la ruta relativa en segmentos de carpeta.
+  // Ej: "app/Models/User.php" → ["app", "Models"] (sin el archivo)
+  const relative = filePath.slice(state.currentFolder.length + 1);
+  const parts = relative.split('/');
+  parts.pop();
+
+  // Expandir cada carpeta ancestro de arriba hacia abajo
+  let currentPath = state.currentFolder;
+
+  for (const part of parts) {
+    currentPath += '/' + part;
+    const dirItem = document.querySelector(`.tree-item[data-path="${CSS.escape(currentPath)}"]`);
+
+    // Si no encontramos el tree-item de esta carpeta, significa que
+    // un nivel anterior no se expandió correctamente — no podemos continuar
+    if (!dirItem) break;
+
+    const chevron = dirItem.querySelector('.tree-chevron');
+    if (chevron && chevron.textContent === '▸') {
+      // Carpeta colapsada: click para expandir (dispara el lazy load)
+      dirItem.click();
+      // Esperar a que renderTreeLevel termine y los hijos aparezcan en el DOM
+      await waitForTreeChildren(dirItem);
+    }
+  }
+
+  // Después de expandir todo el path, el archivo debería existir en el DOM
+  const fileItem = document.querySelector(`.tree-item[data-path="${CSS.escape(filePath)}"]`);
+  if (fileItem) {
+    fileItem.classList.add('active');
+    fileItem.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+}
+
+/**
+ * Esperar a que un directorio del tree cargue sus hijos en el DOM.
+ *
+ * Cuando se hace click en una carpeta colapsada, renderTreeLevel()
+ * crea un div.tree-children y lo inserta justo después del .tree-item
+ * de la carpeta. Usamos un MutationObserver para detectar cuándo
+ * aparece ese div y resolver la promesa.
+ *
+ * Incluye un timeout de 2s como safety net por si readDir falla
+ * silenciosamente o la carpeta está vacía y no se crea el container.
+ */
+function waitForTreeChildren(dirItem) {
+  return new Promise((resolve) => {
+    // Si ya tiene hijos (estaba expandido), resolver de inmediato
+    const next = dirItem.nextElementSibling;
+    if (next && next.classList.contains('tree-children')) {
+      resolve();
+      return;
+    }
+
+    const observer = new MutationObserver(() => {
+      const sibling = dirItem.nextElementSibling;
+      if (sibling && sibling.classList.contains('tree-children')) {
+        observer.disconnect();
+        resolve();
+      }
+    });
+
+    observer.observe(dirItem.parentElement, { childList: true });
+
+    // Safety net: no quedarnos bloqueados si la carpeta está vacía
+    // o hay un error de lectura
+    setTimeout(() => { observer.disconnect(); resolve(); }, 2000);
+  });
 }
 
 // ┌──────────────────────────────────────────────────┐
@@ -593,6 +972,7 @@ const specialTabs = [
   { match: '__command-output__',  container: 'command-output-container', display: 'block', label: 'Output' },
   { match: '__db-viewer__',       container: 'db-viewer-container',      display: 'flex',  label: 'Database' },
   { match: '__route-list__',      container: 'route-list-container',     display: 'flex',  label: 'Routes' },
+  { match: '__log:',             container: 'log-viewer-container',     display: 'flex',  label: 'Log', prefix: true },
 ];
 
 function activateTab(tab) {
@@ -625,13 +1005,51 @@ function activateTab(tab) {
     if (tab.language === 'php') setTimeout(highlightModelCalls, 50);
   }
 
-  // Highlight en file tree
+  // Highlight en file tree y revelar ubicación
   document.querySelectorAll('.tree-item').forEach((el) => {
     el.classList.toggle('active', el.dataset.path === tab.path);
   });
+  if (!tab.path.startsWith('__')) {
+    revealFileInTree(tab.path);
+  }
 
   renderTabs();
+  updateBreadcrumb();
   updateOutline();
+}
+
+/**
+ * Actualizar la barra de breadcrumb con la ruta del archivo activo.
+ *
+ * Muestra la ruta relativa al proyecto (sin el prefijo de currentFolder)
+ * dividida en segmentos separados por "/". El último segmento (nombre
+ * del archivo) se resalta en color primario y bold via CSS.
+ *
+ * Se oculta en tabs especiales (terminal, db, git graph, etc.)
+ * porque no tienen una ruta de archivo real.
+ */
+function updateBreadcrumb() {
+  const bar = document.getElementById('breadcrumb-bar');
+  const tab = state.activeTab;
+
+  // Ocultar si no hay tab activo o es un tab especial (__terminal__, etc.)
+  if (!tab || !tab.path || tab.path.startsWith('__')) {
+    bar.style.display = 'none';
+    return;
+  }
+
+  // Quitar el prefijo de la carpeta del proyecto para mostrar ruta relativa
+  let displayPath = tab.path;
+  if (state.currentFolder && displayPath.startsWith(state.currentFolder)) {
+    displayPath = displayPath.slice(state.currentFolder.length + 1);
+  }
+
+  // Armar los segmentos: app / Http / Controllers / UserController.php
+  const parts = displayPath.split('/');
+  bar.style.display = 'flex';
+  bar.innerHTML = parts.map((p, i) =>
+    `${i > 0 ? '<span class="breadcrumb-sep">/</span>' : ''}<span class="breadcrumb-part">${escapeHtml(p)}</span>`
+  ).join('');
 }
 
 function closeTab(tabPath) {
@@ -719,6 +1137,7 @@ function closeAllTabs() {
   document.getElementById('diff-container').style.display = 'none';
 
   renderTabs();
+  updateBreadcrumb();
   updateOutline();
 }
 
@@ -752,12 +1171,16 @@ function renderTabs() {
         if (e.target.classList.contains('tab-close')) {
           closeTab(e.target.dataset.path);
         } else {
-          const t = state.openTabs[i];
+          const t = state.openTabs.find(t => t.path === el.dataset.tabPath);
           if (t) activateTab(t);
         }
       });
       bar.appendChild(el);
     }
+
+    // Guardar referencia al path para click y drag
+    el.dataset.tabPath = tab.path;
+    el.draggable = true;
 
     // Actualizar solo si cambió
     el.className = `tab ${isActive ? 'active' : ''}`;
@@ -769,6 +1192,107 @@ function renderTabs() {
     }
   });
 }
+
+/**
+ * Drag & Drop para reordenar pestañas.
+ *
+ * Funciona con el HTML5 Drag and Drop API nativo del browser.
+ * Cada .tab tiene draggable=true (seteado en renderTabs).
+ *
+ * CÓMO FUNCIONA:
+ * ─────────────────
+ * 1. dragstart  → guarda el path del tab arrastrado, lo marca semi-transparente
+ * 2. dragover   → calcula si el mouse está en la mitad izquierda o derecha
+ *                 del tab destino, y muestra un indicador (línea accent)
+ *                 en ese lado para indicar dónde se insertará
+ * 3. drop       → reordena el array state.openTabs y re-renderiza
+ * 4. dragend    → limpia las clases CSS de feedback visual
+ *
+ * Se usa event delegation en el #tab-bar en vez de listeners
+ * individuales para no tener que reconectar al re-renderizar.
+ */
+(function initTabDragAndDrop() {
+  const bar = document.getElementById('tab-bar');
+  if (!bar) return;
+
+  let draggedPath = null;
+
+  // ── Inicio del drag: marcar el tab como "en vuelo" ──
+  bar.addEventListener('dragstart', (e) => {
+    const tabEl = e.target.closest('.tab');
+    if (!tabEl) return;
+    draggedPath = tabEl.dataset.tabPath;
+    tabEl.classList.add('tab-dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setDragImage(tabEl, tabEl.offsetWidth / 2, tabEl.offsetHeight / 2);
+  });
+
+  // ── Mientras se arrastra sobre otros tabs ──
+  // Determina la posición de inserción dividiendo el tab destino
+  // en dos mitades: izquierda (insertar antes) y derecha (insertar después).
+  bar.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+
+    const targetEl = e.target.closest('.tab');
+    if (!targetEl || targetEl.dataset.tabPath === draggedPath) return;
+
+    const rect = targetEl.getBoundingClientRect();
+    const midX = rect.left + rect.width / 2;
+
+    // Limpiar indicadores previos antes de mostrar el nuevo
+    bar.querySelectorAll('.tab').forEach(t => {
+      t.classList.remove('tab-drop-before', 'tab-drop-after');
+    });
+
+    if (e.clientX < midX) {
+      targetEl.classList.add('tab-drop-before');
+    } else {
+      targetEl.classList.add('tab-drop-after');
+    }
+  });
+
+  bar.addEventListener('dragleave', (e) => {
+    const tabEl = e.target.closest('.tab');
+    if (tabEl) tabEl.classList.remove('tab-drop-before', 'tab-drop-after');
+  });
+
+  // ── Drop: aplicar el reorden al array de tabs ──
+  bar.addEventListener('drop', (e) => {
+    e.preventDefault();
+    bar.querySelectorAll('.tab').forEach(t => {
+      t.classList.remove('tab-drop-before', 'tab-drop-after', 'tab-dragging');
+    });
+
+    const targetEl = e.target.closest('.tab');
+    if (!targetEl || !draggedPath || targetEl.dataset.tabPath === draggedPath) return;
+
+    const fromIdx = state.openTabs.findIndex(t => t.path === draggedPath);
+    const toIdx = state.openTabs.findIndex(t => t.path === targetEl.dataset.tabPath);
+    if (fromIdx === -1 || toIdx === -1) return;
+
+    // Calcular el índice final de inserción.
+    // Si el mouse está en la mitad izquierda → insertar en toIdx (antes),
+    // si está en la derecha → insertar en toIdx + 1 (después).
+    // Compensar si el origen estaba antes del destino (el splice desplaza).
+    const rect = targetEl.getBoundingClientRect();
+    const midX = rect.left + rect.width / 2;
+    let insertIdx = e.clientX < midX ? toIdx : toIdx + 1;
+    if (fromIdx < insertIdx) insertIdx--;
+
+    const [moved] = state.openTabs.splice(fromIdx, 1);
+    state.openTabs.splice(insertIdx, 0, moved);
+    renderTabs();
+  });
+
+  // ── Cleanup: siempre limpiar las clases de feedback ──
+  bar.addEventListener('dragend', () => {
+    draggedPath = null;
+    bar.querySelectorAll('.tab').forEach(t => {
+      t.classList.remove('tab-dragging', 'tab-drop-before', 'tab-drop-after');
+    });
+  });
+})();
 
 // ┌──────────────────────────────────────────────────┐
 // │  5. FILE SAVE                                    │
@@ -870,6 +1394,305 @@ function getLanguageDisplayName(langId) {
 function toggleSidebar() {
   state.sidebarVisible = !state.sidebarVisible;
   document.getElementById('sidebar').classList.toggle('hidden', !state.sidebarVisible);
+}
+
+/**
+ * Pull o Push desde los botones del status bar.
+ *
+ * Flujo:
+ * 1. Agrega la clase "syncing" al botón → CSS le pone una animación
+ *    de spin en el SVG y desactiva pointer-events para evitar doble click.
+ * 2. Ejecuta git pull o git push via IPC (mismo handler que usa el git panel).
+ * 3. Si hay error lo manda a console.error (aparece en el Error Log).
+ * 4. Al terminar quita la animación y refresca:
+ *    - El nombre de la rama en el status bar (por si pull cambió algo)
+ *    - El panel de git si está abierto (staged/unstaged files)
+ */
+async function statusBarGitSync(action) {
+  if (!state.currentFolder) return;
+  const btn = document.getElementById(action === 'pull' ? 'status-pull' : 'status-push');
+  btn.classList.add('syncing');
+
+  try {
+    const result = action === 'pull'
+      ? await window.api.gitPull(state.currentFolder)
+      : await window.api.gitPush(state.currentFolder);
+
+    if (result.error) {
+      console.error(`Git ${action} error:`, result.error);
+    }
+  } catch (err) {
+    console.error(`Git ${action} failed:`, err);
+  }
+
+  btn.classList.remove('syncing');
+
+  // Refrescar el nombre de la rama y el estado del panel de git
+  window.api.gitBranch(state.currentFolder).then((r) => {
+    if (!r.error) document.getElementById('status-branch').textContent = `⎇ ${r.output}`;
+  });
+  if (typeof refreshGitStatus === 'function') refreshGitStatus();
+}
+
+// ┌──────────────────────────────────────────────────┐
+// │  7b. BRANCH PICKER (Git Checkout)                │
+// │  Paleta de búsqueda estilo VS Code para cambiar  │
+// │  de rama git sin tocar la terminal.              │
+// │                                                  │
+// │  Se abre desde:                                  │
+// │  - Menú nativo Git > Switch Branch (Cmd+Shift+B) │
+// │  - Click en el nombre de la rama en el status bar│
+// │                                                  │
+// │  Muestra ramas locales y remotas, con la rama    │
+// │  actual y main/master siempre al tope. Las ramas │
+// │  remotas que no existen localmente se marcan con  │
+// │  tag "remote" — al seleccionarlas, git crea una  │
+// │  copia local automáticamente (tracking branch).  │
+// │                                                  │
+// │  Navegación: ↑↓ para moverse, Enter para         │
+// │  confirmar, Escape para cancelar, y búsqueda     │
+// │  incremental mientras se escribe.                │
+// └──────────────────────────────────────────────────┘
+let _branchPickerData = { local: [], remoteOnly: [], current: '' };
+let _branchPickerSelected = 0;
+
+/**
+ * Abrir el branch picker: consulta las ramas al main process
+ * y muestra la paleta con el input enfocado.
+ */
+async function showBranchPicker() {
+  if (!state.currentFolder) return;
+
+  const overlay = document.getElementById('branch-picker-overlay');
+  const input = document.getElementById('branch-picker-input');
+
+  const result = await window.api.gitListBranches(state.currentFolder);
+  if (!result || result.error) return;
+
+  _branchPickerData = result;
+  _branchPickerSelected = 0;
+
+  overlay.style.display = 'flex';
+  input.value = '';
+  input.focus();
+  renderBranchList('');
+}
+
+function closeBranchPicker() {
+  document.getElementById('branch-picker-overlay').style.display = 'none';
+}
+
+/**
+ * Renderizar la lista de ramas filtrada y ordenada.
+ *
+ * Orden de prioridad:
+ * 1. Rama actual (marcada con ● y color teal)
+ * 2. main / master (siempre visible para poder volver fácil)
+ * 3. Resto de ramas locales, alfabéticamente
+ * 4. Ramas remotas que no existen localmente (tag "remote")
+ *
+ * El texto de búsqueda se resalta con <mark> en cada nombre.
+ */
+function renderBranchList(filter) {
+  const list = document.getElementById('branch-picker-list');
+  const { local, remoteOnly, current } = _branchPickerData;
+  const q = filter.toLowerCase().trim();
+
+  // Construir la lista unificada de ramas
+  let allBranches = [];
+
+  for (const b of local) {
+    allBranches.push({ name: b, remote: false, isCurrent: b === current });
+  }
+  for (const b of remoteOnly) {
+    allBranches.push({ name: b, remote: true, isCurrent: false });
+  }
+
+  // Filtro de búsqueda
+  if (q) {
+    allBranches = allBranches.filter(b => b.name.toLowerCase().includes(q));
+  }
+
+  // Orden: current → main/master → alfabético
+  allBranches.sort((a, b) => {
+    if (a.isCurrent !== b.isCurrent) return a.isCurrent ? -1 : 1;
+    const aMain = a.name === 'main' || a.name === 'master';
+    const bMain = b.name === 'main' || b.name === 'master';
+    if (aMain !== bMain) return aMain ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+
+  // Clamp del índice seleccionado por si la lista se achicó tras filtrar
+  _branchPickerSelected = Math.min(_branchPickerSelected, Math.max(0, allBranches.length - 1));
+
+  // Generar HTML de cada item
+  list.innerHTML = allBranches.map((b, i) => {
+    const classes = ['branch-item'];
+    if (b.isCurrent) classes.push('current');
+    if (i === _branchPickerSelected) classes.push('selected');
+
+    // Resaltar la coincidencia de búsqueda dentro del nombre
+    let nameHtml = escBranchHtml(b.name);
+    if (q) {
+      const idx = b.name.toLowerCase().indexOf(q);
+      if (idx !== -1) {
+        const before = escBranchHtml(b.name.slice(0, idx));
+        const match = escBranchHtml(b.name.slice(idx, idx + q.length));
+        const after = escBranchHtml(b.name.slice(idx + q.length));
+        nameHtml = `${before}<mark>${match}</mark>${after}`;
+      }
+    }
+
+    const icon = b.isCurrent ? '●' : '⎇';
+    const tag = b.remote ? 'remote' : (b.isCurrent ? 'current' : '');
+
+    return `<div class="${classes.join(' ')}" data-branch="${escBranchAttr(b.name)}">
+      <span class="branch-icon">${icon}</span>
+      <span class="branch-name">${nameHtml}</span>
+      ${tag ? `<span class="branch-tag">${tag}</span>` : ''}
+    </div>`;
+  }).join('');
+
+  if (allBranches.length === 0) {
+    list.innerHTML = '<div style="padding:10px 14px;color:var(--text-muted);font-size:13px;">No branches found</div>';
+  }
+}
+
+// Helpers de escape para prevenir XSS al inyectar nombres de rama en HTML
+function escBranchHtml(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function escBranchAttr(s) {
+  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+}
+
+/**
+ * Ejecutar el checkout de una rama.
+ *
+ * Después de cambiar de rama:
+ * - Actualiza el nombre en el status bar
+ * - Refresca el panel de git (staged/unstaged pueden cambiar)
+ * - Recarga el file tree (archivos distintos según la rama)
+ */
+async function checkoutBranch(branchName) {
+  if (!state.currentFolder || !branchName) return;
+  closeBranchPicker();
+
+  const result = await window.api.gitCheckout(state.currentFolder, branchName);
+  if (result.error) {
+    console.error('Git checkout error:', result.error);
+    return;
+  }
+
+  _lastKnownBranch = branchName;
+  document.getElementById('status-branch').textContent = `⎇ ${branchName}`;
+  if (typeof refreshGitStatus === 'function') refreshGitStatus();
+  if (state.currentFolder) loadFileTree(state.currentFolder);
+}
+
+/**
+ * Inicializar event listeners del branch picker.
+ *
+ * Se ejecuta como IIFE al cargar el script. Usa event delegation
+ * en el #branch-picker-list para los clicks en items.
+ */
+(function initBranchPicker() {
+  const overlay = document.getElementById('branch-picker-overlay');
+  const input = document.getElementById('branch-picker-input');
+  const list = document.getElementById('branch-picker-list');
+  if (!overlay) return;
+
+  // Click en el overlay oscuro → cerrar
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) closeBranchPicker();
+  });
+
+  // Búsqueda incremental: re-renderizar la lista en cada keystroke
+  input.addEventListener('input', () => {
+    _branchPickerSelected = 0;
+    renderBranchList(input.value);
+  });
+
+  // Navegación por teclado dentro de la lista
+  input.addEventListener('keydown', (e) => {
+    const items = list.querySelectorAll('.branch-item');
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      _branchPickerSelected = Math.min(_branchPickerSelected + 1, items.length - 1);
+      renderBranchList(input.value);
+      items[_branchPickerSelected]?.scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      _branchPickerSelected = Math.max(_branchPickerSelected - 1, 0);
+      renderBranchList(input.value);
+      items[_branchPickerSelected]?.scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      const selected = list.querySelector('.branch-item.selected');
+      if (selected) {
+        const branch = selected.dataset.branch;
+        // No hacer checkout si ya estamos en esa rama
+        if (branch !== _branchPickerData.current) {
+          checkoutBranch(branch);
+        }
+      }
+    } else if (e.key === 'Escape') {
+      closeBranchPicker();
+    }
+  });
+
+  // Click directo en un item de la lista
+  list.addEventListener('click', (e) => {
+    const item = e.target.closest('.branch-item');
+    if (!item) return;
+    const branch = item.dataset.branch;
+    if (branch !== _branchPickerData.current) {
+      checkoutBranch(branch);
+    }
+  });
+})();
+
+/**
+ * Sidebar resizable por drag.
+ *
+ * El handle es una franja de 4px en el borde derecho del sidebar
+ * (posicionada con margin-left negativo para que se superponga al borde).
+ *
+ * Al hacer mousedown arranca el drag:
+ * 1. Desactiva la transición CSS del sidebar para que no haya delay
+ * 2. En cada mousemove calcula el nuevo ancho (clamp entre 150 y 600px)
+ * 3. Al soltar restaura la transición y reajusta el layout de Monaco
+ */
+function initSidebarResize() {
+  const handle = document.getElementById('sidebar-resize-handle');
+  const sidebar = document.getElementById('sidebar');
+  let startX, startWidth;
+
+  handle.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    startX = e.clientX;
+    startWidth = sidebar.offsetWidth;
+    handle.classList.add('dragging');
+    sidebar.style.transition = 'none'; // Sin animación durante el drag
+
+    function onMouseMove(e) {
+      const newWidth = Math.max(150, Math.min(600, startWidth + (e.clientX - startX)));
+      sidebar.style.width = `${newWidth}px`;
+    }
+
+    function onMouseUp() {
+      handle.classList.remove('dragging');
+      sidebar.style.transition = ''; // Restaurar transición CSS
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+      // Monaco necesita saber que cambió el tamaño del contenedor
+      if (state.editor) state.editor.layout();
+    }
+
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  });
 }
 
 function toggleTerminal() {
@@ -1500,6 +2323,7 @@ function showExplorerPanel() {
   document.getElementById('explorer-sections').style.display = '';
   document.getElementById('git-panel').style.display = 'none';
   document.getElementById('search-panel').style.display = 'none';
+  document.getElementById('log-panel').style.display = 'none';
   document.getElementById('sidebar-header').querySelector('span').textContent =
     state.currentFolder
       ? state.currentFolder.split(/[/\\]/).pop().toUpperCase()
@@ -1516,6 +2340,7 @@ function showGitPanel() {
   document.getElementById('explorer-sections').style.display = 'none';
   document.getElementById('git-panel').style.display = 'flex';
   document.getElementById('search-panel').style.display = 'none';
+  document.getElementById('log-panel').style.display = 'none';
   document.getElementById('sidebar-header').querySelector('span').textContent =
     'SOURCE CONTROL';
   setActiveActionButton('btn-toggle-git');
@@ -1550,6 +2375,7 @@ function showSearchPanel() {
   document.getElementById('explorer-sections').style.display = 'none';
   document.getElementById('git-panel').style.display = 'none';
   document.getElementById('search-panel').style.display = 'flex';
+  document.getElementById('log-panel').style.display = 'none';
   document.getElementById('sidebar-header').querySelector('span').textContent = 'SEARCH';
   setActiveActionButton('btn-toggle-search');
 
@@ -2003,7 +2829,20 @@ function initEventListeners() {
 
   // Click en indicador de zoom → reset
   document.getElementById('status-zoom').addEventListener('click', () => editorZoomReset());
+
+  // Click en la rama del status bar → abrir branch picker
+  document.getElementById('status-branch').addEventListener('click', () => showBranchPicker());
+  document.getElementById('status-branch').style.cursor = 'pointer';
+
+  // Menu Git > Switch Branch
+  window.api.onMenuGitCheckout(() => showBranchPicker());
+
+  // Botones de Pull (↓) y Push (↑) en el status bar, junto al nombre de la rama.
+  // Estilo VS Code: un click rápido para sincronizar sin abrir el panel de git.
+  document.getElementById('status-pull').addEventListener('click', () => statusBarGitSync('pull'));
+  document.getElementById('status-push').addEventListener('click', () => statusBarGitSync('push'));
   window.api.onMenuSwitchTheme((theme) => switchTheme(theme));
+  window.api.onAutoSaveChanged((enabled) => { state.autoSave = enabled; });
   window.api.onFolderOpened((path) => loadFileTree(path));
   window.api.onFileOpened((path) => {
     const name = path.split(/[/\\]/).pop();
@@ -2806,6 +3645,60 @@ function initComposerArtisan() {
     }
   });
 
+  // ── New Laravel Project ──
+  // Flujo completo para crear un proyecto Laravel desde cero:
+  // 1. Prompt → nombre del proyecto (ej: "my-app")
+  // 2. Diálogo nativo → elegir carpeta destino (ej: ~/projects)
+  // 3. Ejecutar composer create-project en background
+  // 4. Al terminar, abrir el proyecto automáticamente
+  //
+  // El output se muestra en el tab Output en tiempo real para que
+  // el usuario pueda ver el progreso de la descarga de paquetes.
+  window.api.onComposerNewLaravel(async () => {
+    const projectName = await showCommandPrompt(
+      'New Laravel Project',
+      'my-app',
+      'Project folder name (e.g. my-app, blog, api)'
+    );
+    if (!projectName) return;
+
+    // Validar que el nombre sea seguro para usar como nombre de carpeta.
+    // Evitar caracteres especiales que puedan causar problemas en el filesystem
+    // o en los comandos de Composer.
+    if (!/^[a-zA-Z0-9_-]+$/.test(projectName)) {
+      showCommandOutput(
+        'New Laravel Project',
+        '',
+        'Invalid project name. Use only letters, numbers, hyphens and underscores.',
+        1
+      );
+      return;
+    }
+
+    // Abrir diálogo nativo para elegir dónde crear el proyecto
+    const folderResult = await window.api.chooseFolder();
+    if (folderResult.canceled) return;
+
+    // Mostrar estado de "en progreso" mientras Composer trabaja.
+    // Esto puede tardar varios minutos en conexiones lentas.
+    showCommandOutput(
+      `Creating: composer create-project laravel/laravel ${projectName}`,
+      `Installing in ${folderResult.path}/${projectName}...\nThis may take a few minutes.`,
+      null,
+      0
+    );
+
+    const result = await window.api.composerCreateProject(folderResult.path, projectName);
+
+    // Mostrar el resultado final (éxito o error)
+    showCommandOutput(
+      `$ composer create-project laravel/laravel ${projectName}`,
+      result.output || '',
+      result.error || '',
+      result.code
+    );
+  });
+
   // ── Tinker ──
   window.api.onArtisanTinker(() => {
     // Abrir terminal y ejecutar tinker ahí
@@ -3549,6 +4442,389 @@ function initDbAndRoutes() {
   window.api.onMenuRouteList(() => openRouteList());
   document.getElementById('btn-open-db').addEventListener('click', () => openDbViewer());
   document.getElementById('btn-open-routes').addEventListener('click', () => openRouteList());
+  document.getElementById('btn-open-logs').addEventListener('click', () => toggleLogPanel());
+}
+
+// ┌──────────────────────────────────────────────────┐
+// │  LOG PANEL (sidebar)                              │
+// │  Reemplaza el file tree (igual que Git y Search)  │
+// │  con una lista de todos los archivos que hay en   │
+// │  storage/logs. Al hacer click en uno se abre en   │
+// │  un tab especial con vista formateada.            │
+// └──────────────────────────────────────────────────┘
+
+function toggleLogPanel() {
+  if (state.sidebarView === 'logs') {
+    showExplorerPanel();
+  } else {
+    showLogPanel();
+  }
+}
+
+async function showLogPanel() {
+  state.sidebarView = 'logs';
+  document.getElementById('explorer-sections').style.display = 'none';
+  document.getElementById('git-panel').style.display = 'none';
+  document.getElementById('search-panel').style.display = 'none';
+  document.getElementById('log-panel').style.display = 'flex';
+  document.getElementById('sidebar-header').querySelector('span').textContent = 'LOGS';
+  setActiveActionButton('btn-open-logs');
+
+  if (state.gitRefreshTimer) {
+    clearInterval(state.gitRefreshTimer);
+    state.gitRefreshTimer = null;
+  }
+
+  await loadLogFileList();
+}
+
+async function loadLogFileList() {
+  const list = document.getElementById('log-file-list');
+  list.innerHTML = '<div class="db-loading">Loading...</div>';
+
+  const result = await window.api.listLogs();
+  if (result.error) {
+    list.innerHTML = `<div class="db-error">${escapeHtml(result.error)}</div>`;
+    return;
+  }
+
+  if (!result.files.length) {
+    list.innerHTML = '<div class="db-loading" style="font-size:12px">No log files in storage/logs</div>';
+    return;
+  }
+
+  let html = '';
+  for (const file of result.files) {
+    html += `<div class="log-file-item" data-path="${escapeAttr(file.path)}" title="${escapeAttr(file.path)}">
+      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+      <span>${escapeHtml(file.name)}</span>
+    </div>`;
+  }
+
+  list.innerHTML = html;
+
+  // Click en un log → abrirlo formateado en tab especial
+  list.querySelectorAll('.log-file-item').forEach((item) => {
+    item.addEventListener('click', () => {
+      list.querySelectorAll('.log-file-item').forEach((i) => i.classList.remove('active'));
+      item.classList.add('active');
+      const filePath = item.dataset.path;
+      const fileName = filePath.split(/[/\\]/).pop();
+      openFormattedLog(filePath, fileName);
+    });
+  });
+}
+
+// ┌──────────────────────────────────────────────────┐
+// │  LOG VIEWER (tab formateado)                      │
+// │                                                   │
+// │  Cuando el usuario clickea un archivo de log en   │
+// │  el panel lateral, se abre acá como tab especial. │
+// │                                                   │
+// │  El contenido NO se muestra en Monaco (sería solo │
+// │  texto plano), sino que se parsea el formato de   │
+// │  log de Laravel:                                  │
+// │    [2024-03-16 10:30:45] local.ERROR: message     │
+// │                                                   │
+// │  Y se muestra formateado con:                     │
+// │  - Badges de color por nivel (ERROR, WARNING...)  │
+// │  - Stack traces colapsables                       │
+// │  - JSON embebido pretty-printed                   │
+// │  - Filtros por nivel + búsqueda full-text         │
+// └──────────────────────────────────────────────────┘
+
+async function openFormattedLog(filePath, fileName) {
+  const tabPath = `__log:${filePath}__`;
+  const existing = state.openTabs.find((t) => t.path === tabPath);
+  if (existing) {
+    activateTab(existing);
+    loadFormattedLog(filePath);
+    return;
+  }
+
+  const tab = { path: tabPath, name: fileName, model: null, language: 'log', modified: false };
+  state.openTabs.push(tab);
+  activateTab(tab);
+  loadFormattedLog(filePath);
+}
+
+async function loadFormattedLog(filePath) {
+  const container = document.getElementById('log-viewer-container');
+  container.innerHTML = '<div class="db-loading">Loading log...</div>';
+
+  const result = await window.api.readLogTail(filePath, 2000);
+  if (result.error) {
+    container.innerHTML = `<div class="db-error">${escapeHtml(result.error)}</div>`;
+    return;
+  }
+
+  const raw = result.content || '';
+  const entries = parseLogEntries(raw);
+
+  if (!entries.length) {
+    container.innerHTML = '<div class="db-loading">Log file is empty</div>';
+    return;
+  }
+
+  let html = `
+    <div class="log-v-header">
+      <span class="log-v-count">${entries.length} entries</span>
+      <div class="log-v-filters">
+        <button class="log-v-filter active" data-level="all">All</button>
+        <button class="log-v-filter" data-level="ERROR">Error</button>
+        <button class="log-v-filter" data-level="WARNING">Warning</button>
+        <button class="log-v-filter" data-level="INFO">Info</button>
+        <button class="log-v-filter" data-level="DEBUG">Debug</button>
+      </div>
+      <div class="log-v-search-box">
+        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input class="log-v-search-input" type="text" placeholder="Search logs..." autocomplete="off" spellcheck="false" />
+      </div>
+      <button class="log-refresh-btn" title="Refresh">
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+      </button>
+    </div>
+    <div class="log-v-entries">`;
+
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i];
+    const levelClass = `log-level-${(e.level || 'info').toLowerCase()}`;
+    const hasStack = e.stack && e.stack.trim().length > 0;
+
+    html += `<div class="log-v-entry ${levelClass}" data-level="${escapeAttr(e.level || '')}">
+      <div class="log-v-entry-head">
+        <span class="log-v-timestamp">${escapeHtml(e.timestamp || '')}</span>
+        <span class="log-v-badge ${levelClass}">${escapeHtml(e.level || 'LOG')}</span>
+        <span class="log-v-env">${escapeHtml(e.env || '')}</span>
+        ${hasStack ? '<button class="log-v-toggle" title="Toggle stack trace">▸</button>' : ''}
+        <span class="log-v-message">${formatLogMessage(e.message)}</span>
+      </div>`;
+
+    if (hasStack) {
+      html += `<pre class="log-v-stack" style="display:none">${escapeHtml(e.stack)}</pre>`;
+    }
+
+    html += '</div>';
+  }
+
+  html += '</div>';
+  container.innerHTML = html;
+
+  // Toggle stack traces
+  container.querySelectorAll('.log-v-toggle').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const entry = btn.closest('.log-v-entry');
+      const stack = entry.querySelector('.log-v-stack');
+      if (!stack) return;
+      const visible = stack.style.display !== 'none';
+      stack.style.display = visible ? 'none' : 'block';
+      btn.textContent = visible ? '▸' : '▾';
+    });
+  });
+
+  // Level filters
+  container.querySelectorAll('.log-v-filter').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      container.querySelectorAll('.log-v-filter').forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      filterLogEntries(container, entries.length);
+    });
+  });
+
+  // Search
+  const searchInput = container.querySelector('.log-v-search-input');
+  let searchTimeout = null;
+  searchInput.addEventListener('input', () => {
+    clearTimeout(searchTimeout);
+    searchTimeout = setTimeout(() => filterLogEntries(container, entries.length), 200);
+  });
+  searchInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      searchInput.value = '';
+      filterLogEntries(container, entries.length);
+      searchInput.blur();
+    }
+  });
+
+  // Refresh
+  container.querySelector('.log-refresh-btn')?.addEventListener('click', () => {
+    loadFormattedLog(filePath);
+  });
+
+  // Scroll to bottom (latest entries)
+  const entriesDiv = container.querySelector('.log-v-entries');
+  if (entriesDiv) entriesDiv.scrollTop = entriesDiv.scrollHeight;
+}
+
+/**
+ * Filtrar entries del log viewer combinando nivel + texto.
+ *
+ * Se llama tanto al escribir en el buscador como al clickear
+ * un filtro de nivel. Combina ambos criterios: una entry se
+ * muestra solo si matchea el nivel activo Y contiene el texto
+ * buscado.
+ *
+ * Si el match está dentro de un stack trace colapsado, lo
+ * expande automáticamente para que el usuario vea dónde está.
+ */
+function filterLogEntries(container, totalCount) {
+  const query = (container.querySelector('.log-v-search-input')?.value || '').trim().toLowerCase();
+  const activeFilter = container.querySelector('.log-v-filter.active')?.dataset.level || 'all';
+  const allEntries = container.querySelectorAll('.log-v-entry');
+  let visible = 0;
+
+  allEntries.forEach((entry) => {
+    const levelMatch = activeFilter === 'all' || entry.dataset.level === activeFilter;
+    let textMatch = true;
+    if (query) {
+      const text = entry.textContent.toLowerCase();
+      textMatch = text.includes(query);
+    }
+    const show = levelMatch && textMatch;
+    entry.style.display = show ? '' : 'none';
+    if (show) visible++;
+
+    // Limpiar highlights anteriores antes de aplicar nuevos
+    entry.querySelectorAll('.log-search-hl').forEach((hl) => {
+      hl.replaceWith(document.createTextNode(hl.textContent));
+    });
+
+    // Aplicar highlights en las entries visibles que matchean
+    if (show && query) {
+      highlightInElement(entry.querySelector('.log-v-message'), query);
+      // Si el match está en el stack trace, expandirlo
+      const stack = entry.querySelector('.log-v-stack');
+      if (stack && stack.textContent.toLowerCase().includes(query)) {
+        highlightInElement(stack, query);
+        stack.style.display = 'block';
+        const toggle = entry.querySelector('.log-v-toggle');
+        if (toggle) toggle.textContent = '▾';
+      }
+    }
+  });
+
+  // Actualizar el contador: "15 / 230 entries" o "230 entries"
+  const countEl = container.querySelector('.log-v-count');
+  if (countEl) {
+    countEl.textContent = (query || activeFilter !== 'all')
+      ? `${visible} / ${totalCount} entries`
+      : `${totalCount} entries`;
+  }
+}
+
+/**
+ * Resaltar todas las ocurrencias de `query` dentro de un elemento DOM.
+ *
+ * Recorre todos los nodos de texto del elemento y envuelve los matches
+ * en <span class="log-search-hl"> para que CSS los pinte con fondo naranja.
+ *
+ * Usa TreeWalker para no pisar nodos que no sean texto (ej: spans de JSON).
+ */
+function highlightInElement(el, query) {
+  if (!el) return;
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  const textNodes = [];
+  while (walker.nextNode()) textNodes.push(walker.currentNode);
+
+  const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+  for (const node of textNodes) {
+    if (!regex.test(node.textContent)) continue;
+    const span = document.createElement('span');
+    span.innerHTML = escapeHtml(node.textContent).replace(regex, '<span class="log-search-hl">$1</span>');
+    node.replaceWith(span);
+  }
+}
+
+/**
+ * Formatear el mensaje de un entry de log.
+ *
+ * Busca objetos/arrays JSON embebidos en el texto del mensaje
+ * (ej: {"user_id": 5, "action": "login"}) y los reemplaza con
+ * versiones pretty-printed con indentación de 2 espacios.
+ *
+ * Si el JSON no se puede parsear (ej: es un string que casualmente
+ * tiene llaves), lo deja tal cual sin romper nada.
+ */
+function formatLogMessage(message) {
+  const jsonRegex = /(\{[\s\S]*\}|\[[\s\S]*\])/g;
+  let lastIndex = 0;
+  let result = '';
+  let match;
+
+  while ((match = jsonRegex.exec(message)) !== null) {
+    // Text before JSON
+    if (match.index > lastIndex) {
+      result += escapeHtml(message.slice(lastIndex, match.index));
+    }
+    // Try to parse and pretty-print JSON
+    try {
+      const parsed = JSON.parse(match[1]);
+      const pretty = JSON.stringify(parsed, null, 2);
+      result += `<span class="log-json">${escapeHtml(pretty)}</span>`;
+    } catch {
+      result += escapeHtml(match[1]);
+    }
+    lastIndex = match.index + match[0].length;
+  }
+
+  // Remaining text after last JSON
+  if (lastIndex < message.length) {
+    result += escapeHtml(message.slice(lastIndex));
+  }
+
+  return result || escapeHtml(message);
+}
+
+/**
+ * Parsear texto raw de un archivo de log en entries estructurados.
+ *
+ * El formato estándar de Laravel es:
+ *   [2024-03-16 10:30:45] local.ERROR: SQLSTATE[42S02]: Base table not found
+ *   #0 /var/www/app/Models/User.php(42): ...
+ *   #1 /var/www/vendor/laravel/framework/...
+ *
+ * Cada línea que empieza con [timestamp] es una nueva entry.
+ * Las líneas que siguen (sin timestamp) son parte del stack trace
+ * de la entry anterior.
+ *
+ * También soporta archivos con líneas sueltas (sin el formato
+ * de Laravel) — las trata como entries individuales sin nivel.
+ */
+function parseLogEntries(raw) {
+  const entries = [];
+  const entryRegex = /^\[(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}[^\]]*)\]\s+(\w+)\.(\w+):\s*(.*)/;
+  const lines = raw.split('\n');
+  let current = null;
+
+  for (const line of lines) {
+    const match = line.match(entryRegex);
+    if (match) {
+      // Nueva entry → guardar la anterior y empezar una nueva
+      if (current) entries.push(current);
+      current = {
+        timestamp: match[1],
+        env: match[2],           // ej: "local", "production"
+        level: match[3].toUpperCase(), // ej: "ERROR", "INFO"
+        message: match[4],
+        stack: '',
+      };
+    } else if (current) {
+      // Línea de continuación (stack trace, context, etc.)
+      current.stack += (current.stack ? '\n' : '') + line;
+    } else if (line.trim()) {
+      // Líneas sueltas antes de cualquier entry con timestamp
+      entries.push({
+        timestamp: '',
+        env: '',
+        level: '',
+        message: line,
+        stack: '',
+      });
+    }
+  }
+
+  if (current) entries.push(current);
+  return entries;
 }
 
 // ┌──────────────────────────────────────────────────┐
@@ -3682,5 +4958,8 @@ function initSystemMonitor() {
   initComposerArtisan();
   initPhpTools();
   initDbAndRoutes();
+  initTreeContextMenu();
+  initSidebarResize();
+  renderRecentFolders(); // Mostrar carpetas recientes en la welcome screen
   initSystemMonitor();
 })();

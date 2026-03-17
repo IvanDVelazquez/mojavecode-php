@@ -84,6 +84,30 @@ if (app.isPackaged && process.platform === 'darwin') {
   process.env.PATH = [...new Set([...existing, ...process.env.PATH.split(':')])].join(':');
 }
 
+// ── Carpetas recientes ──
+// Se guardan en un JSON en userData para que el menú nativo
+// pueda leerlas sincrónicamente al construirse.
+const RECENT_FILE = path.join(app.getPath('userData'), 'recent-folders.json');
+const MAX_RECENT = 5;
+
+function getRecentFolders() {
+  try {
+    return JSON.parse(fs.readFileSync(RECENT_FILE, 'utf-8'));
+  } catch {
+    return [];
+  }
+}
+
+function saveRecentFolder(folderPath) {
+  let recent = getRecentFolders().filter((p) => p !== folderPath);
+  recent.unshift(folderPath);
+  if (recent.length > MAX_RECENT) recent.length = MAX_RECENT;
+  try {
+    fs.writeFileSync(RECENT_FILE, JSON.stringify(recent), 'utf-8');
+  } catch { /* ignorar */ }
+  return recent;
+}
+
 // node-pty: pseudo-terminal para la terminal integrada
 // Se importa con try/catch porque es un native module que
 // puede fallar si no se compiló correctamente
@@ -113,6 +137,7 @@ let projectCapabilities = {
   dockerContainer: null, // nombre del contenedor Docker
   dockerWorkdir: null, // workdir dentro del contenedor
   formatOnSave: false, // desactivado por defecto
+  autoSave: false, // auto-save desactivado por defecto
   projectRoot: null,
 };
 
@@ -152,7 +177,7 @@ function createWindow() {
 
 // ────────────────────────────────────────────
 // 2. MENÚ NATIVO — Barra superior de macOS
-//    File, Edit, View, Terminal, Composer*, Artisan*, PHP*, Tema, Help
+//    File, Edit, View, Terminal, Git, Composer, Artisan*, PHP*, Tema, Help
 //    (* = dinámicos, aparecen solo si se detectan en el proyecto)
 // ────────────────────────────────────────────
 function createMenu() {
@@ -170,6 +195,36 @@ function createMenu() {
           accelerator: 'CmdOrCtrl+Shift+O',
           click: () => handleOpenFile(),
         },
+        // Submenú de carpetas recientes.
+        // Se construye dinámicamente cada vez que se llama createMenu().
+        // Cada item muestra el nombre de la carpeta como label y la ruta
+        // abreviada como sublabel. Al clickear, abre la carpeta directo.
+        {
+          label: 'Open Recent',
+          submenu: (() => {
+            const recent = getRecentFolders();
+            if (!recent.length) return [{ label: 'No Recent Folders', enabled: false }];
+            const items = recent.map((folderPath) => ({
+              label: folderPath.split(/[/\\]/).pop(),
+              sublabel: folderPath.replace(/^\/Users\/[^/]+/, '~'),
+              click: () => {
+                saveRecentFolder(folderPath);
+                mainWindow?.webContents.send('folder:opened', folderPath);
+              },
+            }));
+            items.push(
+              { type: 'separator' },
+              {
+                label: 'Clear Recent',
+                click: () => {
+                  try { fs.writeFileSync(RECENT_FILE, '[]', 'utf-8'); } catch {}
+                  createMenu(); // Reconstruir para vaciar el submenú
+                },
+              }
+            );
+            return items;
+          })(),
+        },
         { type: 'separator' },
         {
           label: 'Save',
@@ -180,6 +235,19 @@ function createMenu() {
           label: 'Save As...',
           accelerator: 'CmdOrCtrl+Shift+S',
           click: () => mainWindow?.webContents.send('menu:save-as'),
+        },
+        { type: 'separator' },
+        // Auto Save: guarda automáticamente 1s después del último cambio.
+        // El estado se mantiene en projectCapabilities y se sincroniza
+        // con el renderer vía IPC para que el debounce funcione allá.
+        {
+          label: 'Auto Save',
+          type: 'checkbox',
+          checked: projectCapabilities.autoSave,
+          click: (menuItem) => {
+            projectCapabilities.autoSave = menuItem.checked;
+            mainWindow?.webContents.send('menu:auto-save-changed', menuItem.checked);
+          },
         },
         { type: 'separator' },
         { role: 'quit' },
@@ -260,6 +328,20 @@ function createMenu() {
         },
       ],
     },
+    // ── Git Menu ──
+    // Operaciones de git que no requieren el panel lateral.
+    // Switch Branch abre una paleta de búsqueda en el renderer
+    // para cambiar de rama sin tocar la terminal.
+    {
+      label: 'Git',
+      submenu: [
+        {
+          label: 'Switch Branch...',
+          accelerator: 'CmdOrCtrl+Shift+B',
+          click: () => mainWindow?.webContents.send('menu:git-checkout'),
+        },
+      ],
+    },
     {
       label: 'Tema',
       submenu: [
@@ -276,42 +358,53 @@ function createMenu() {
         },
       ],
     },
-    // ── Composer Menu (dinámico) ──
-    ...(projectCapabilities.hasComposer ? [{
+    // ── Composer Menu ──
+    // Siempre visible en la barra para que "New Laravel Project"
+    // esté disponible incluso sin un proyecto abierto.
+    // Los comandos de proyecto (install, require, etc.) solo
+    // aparecen cuando se detecta un composer.json en la carpeta.
+    {
       label: 'Composer',
       submenu: [
         {
-          label: 'Install',
-          click: () => mainWindow?.webContents.send('composer:run', 'install'),
+          label: 'New Laravel Project...',
+          click: () => mainWindow?.webContents.send('composer:new-laravel'),
         },
-        {
-          label: 'Update',
-          click: () => mainWindow?.webContents.send('composer:run', 'update'),
-        },
-        { type: 'separator' },
-        {
-          label: 'Require Package...',
-          click: () => mainWindow?.webContents.send('composer:prompt', 'require'),
-        },
-        {
-          label: 'Require Dev Package...',
-          click: () => mainWindow?.webContents.send('composer:prompt', 'require --dev'),
-        },
-        {
-          label: 'Remove Package...',
-          click: () => mainWindow?.webContents.send('composer:prompt', 'remove'),
-        },
-        { type: 'separator' },
-        {
-          label: 'Dump Autoload',
-          click: () => mainWindow?.webContents.send('composer:run', 'dump-autoload'),
-        },
-        {
-          label: 'Run Script...',
-          click: () => mainWindow?.webContents.send('composer:prompt', 'run-script'),
-        },
+        ...(projectCapabilities.hasComposer ? [
+          { type: 'separator' },
+          {
+            label: 'Install',
+            click: () => mainWindow?.webContents.send('composer:run', 'install'),
+          },
+          {
+            label: 'Update',
+            click: () => mainWindow?.webContents.send('composer:run', 'update'),
+          },
+          { type: 'separator' },
+          {
+            label: 'Require Package...',
+            click: () => mainWindow?.webContents.send('composer:prompt', 'require'),
+          },
+          {
+            label: 'Require Dev Package...',
+            click: () => mainWindow?.webContents.send('composer:prompt', 'require --dev'),
+          },
+          {
+            label: 'Remove Package...',
+            click: () => mainWindow?.webContents.send('composer:prompt', 'remove'),
+          },
+          { type: 'separator' },
+          {
+            label: 'Dump Autoload',
+            click: () => mainWindow?.webContents.send('composer:run', 'dump-autoload'),
+          },
+          {
+            label: 'Run Script...',
+            click: () => mainWindow?.webContents.send('composer:prompt', 'run-script'),
+          },
+        ] : []),
       ],
-    }] : []),
+    },
     // ── Artisan Menu (dinámico) ──
     ...(projectCapabilities.hasArtisan ? [{
       label: 'Artisan',
@@ -446,7 +539,7 @@ function createMenu() {
             dialog.showMessageBox(mainWindow, {
               type: 'info',
               title: 'MojaveCode PHP',
-              message: 'MojaveCode PHP v0.1.0',
+              message: 'MojaveCode PHP v2.1.0',
               detail: 'A lightweight code editor by MojaveWare.\nBuilt with Electron + Monaco + xterm.js',
             });
           },
@@ -729,6 +822,103 @@ ipcMain.handle('fs:stat', async (event, filePath) => {
   }
 });
 
+/**
+ * Eliminar un archivo o carpeta del disco.
+ *
+ * Si es carpeta usa `rm` recursivo; si es archivo usa `unlink`.
+ * El renderer llama esto desde el context menu del file tree
+ * después de que el usuario confirma la eliminación.
+ */
+ipcMain.handle('fs:deleteFile', async (event, targetPath) => {
+  try {
+    const stat = await fs.promises.stat(targetPath);
+    if (stat.isDirectory()) {
+      await fs.promises.rm(targetPath, { recursive: true, force: true });
+    } else {
+      await fs.promises.unlink(targetPath);
+    }
+    return { success: true, error: null };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+/**
+ * Copiar un archivo o carpeta a una nueva ubicación.
+ *
+ * Para carpetas usa `cp` recursivo (copia todo el árbol).
+ * El renderer determina el destPath (agrega " - Copy" si ya existe).
+ */
+ipcMain.handle('fs:copyFile', async (event, srcPath, destPath) => {
+  try {
+    const stat = await fs.promises.stat(srcPath);
+    if (stat.isDirectory()) {
+      await fs.promises.cp(srcPath, destPath, { recursive: true });
+    } else {
+      await fs.promises.copyFile(srcPath, destPath);
+    }
+    return { success: true, error: null };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+/**
+ * Listar los archivos de log en storage/logs.
+ *
+ * Lee el directorio storage/logs del proyecto Laravel
+ * y devuelve todos los archivos (no solo laravel.log).
+ * Ordenados alfabéticamente descendente para que los
+ * más recientes aparezcan primero (ej: laravel-2024-03-16.log).
+ */
+ipcMain.handle('fs:listLogs', async (event) => {
+  if (!projectCapabilities.projectRoot) {
+    return { files: [], error: 'No project open' };
+  }
+  const logsDir = path.join(projectCapabilities.projectRoot, 'storage', 'logs');
+  try {
+    const entries = await fs.promises.readdir(logsDir, { withFileTypes: true });
+    const logFiles = entries
+      .filter((e) => !e.isDirectory() && !e.name.startsWith('.'))
+      .map((e) => ({
+        name: e.name,
+        path: path.join(logsDir, e.name),
+      }))
+      .sort((a, b) => b.name.localeCompare(a.name)); // Más recientes primero
+    return { files: logFiles, error: null };
+  } catch (err) {
+    return { files: [], error: err.message };
+  }
+});
+
+/**
+ * Leer las últimas N líneas de un archivo de log.
+ *
+ * En vez de leer todo el archivo (que puede ser enorme),
+ * solo devuelve las últimas `lines` líneas. El renderer
+ * parsea estas líneas y las muestra formateadas con colores
+ * según el nivel (ERROR, WARNING, INFO, DEBUG).
+ */
+ipcMain.handle('fs:readLogTail', async (event, filePath, lines = 500) => {
+  try {
+    const content = await fs.promises.readFile(filePath, 'utf-8');
+    const allLines = content.split('\n');
+    const tail = allLines.slice(-lines).join('\n');
+    return { content: tail, totalLines: allLines.length, error: null };
+  } catch (err) {
+    return { content: null, totalLines: 0, error: err.message };
+  }
+});
+
+// Cuando el renderer abre una carpeta reciente desde la welcome screen,
+// nos avisa para mantener sincronizados los dos storages:
+// - localStorage del renderer (para la welcome screen)
+// - recent-folders.json del main (para el menú nativo File > Open Recent)
+ipcMain.on('recent:opened', (event, folderPath) => {
+  saveRecentFolder(folderPath);
+  createMenu(); // Reconstruir para que la carpeta suba al tope del submenú
+});
+
 // ────────────────────────────────────────────
 // 4. IPC HANDLERS — DIÁLOGOS NATIVOS DEL SO
 //    Open Folder, Open File, Save As
@@ -738,7 +928,12 @@ async function handleOpenFolder() {
     properties: ['openDirectory'],
   });
   if (!result.canceled && result.filePaths[0]) {
-    mainWindow.webContents.send('folder:opened', result.filePaths[0]);
+    const folderPath = result.filePaths[0];
+    // Guardar en recientes y reconstruir el menú para que
+    // File > Open Recent refleje la nueva carpeta al tope.
+    saveRecentFolder(folderPath);
+    createMenu();
+    mainWindow.webContents.send('folder:opened', folderPath);
   }
 }
 
@@ -988,6 +1183,46 @@ ipcMain.handle('git:discard', async (event, cwd, filePath) => {
 // git push
 ipcMain.handle('git:push', async (event, cwd) => {
   return runGit(['push'], cwd);
+});
+
+// Listar todas las ramas del repo (locales + remotas).
+// Devuelve { local: string[], remoteOnly: string[], current: string }
+//
+// Las ramas remotas se devuelven SIN el prefijo del remote (origin/),
+// y solo se incluyen las que NO existen como branch local (para evitar
+// duplicados en la UI). Esto permite al renderer mostrar una lista
+// unificada donde las ramas locales aparecen primero y las remotas
+// se distinguen con un tag "remote".
+ipcMain.handle('git:listBranches', async (event, cwd) => {
+  // Locales: git branch --format=...
+  const localResult = await runGit(['branch', '--format=%(refname:short)'], cwd);
+  const local = localResult.error ? [] : localResult.output.split('\n').filter(Boolean);
+
+  // Remotas: git branch -r --format=...
+  // Filtramos HEAD (origin/HEAD → origin/main, no es una rama real)
+  // y quitamos el prefijo "origin/" para mostrar nombres limpios.
+  const remoteResult = await runGit(['branch', '-r', '--format=%(refname:short)'], cwd);
+  const remote = remoteResult.error ? [] : remoteResult.output
+    .split('\n')
+    .filter(Boolean)
+    .filter(b => !b.includes('/HEAD'))
+    .map(b => b.replace(/^[^/]+\//, ''));
+
+  // Rama actual
+  const currentResult = await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], cwd);
+  const current = currentResult.error ? '' : currentResult.output;
+
+  // Deduplicar: solo incluir remotas que no existen localmente
+  const seen = new Set(local);
+  const remoteOnly = remote.filter(b => !seen.has(b));
+
+  return { local, remoteOnly, current };
+});
+
+// Cambiar de rama. Si la rama es remota y no existe localmente,
+// git crea automáticamente una tracking branch local.
+ipcMain.handle('git:checkout', async (event, cwd, branch) => {
+  return runGit(['checkout', branch], cwd);
 });
 
 // git pull
@@ -1601,6 +1836,59 @@ ipcMain.handle('composer:exec', async (event, subcommand, args) => {
   return runProjectCommand('composer', cmdArgs, projectCapabilities.projectRoot);
 });
 
+// Crear un nuevo proyecto Laravel desde cero.
+//
+// Ejecuta: composer create-project laravel/laravel <nombre>
+// en el directorio padre elegido por el usuario.
+//
+// El timeout es de 10 minutos (vs los 2 min del config normal)
+// porque descargar todas las dependencias de Laravel puede tardar
+// bastante dependiendo de la conexión y si no hay caché de Composer.
+//
+// Si el comando termina exitosamente, abre el nuevo proyecto
+// automáticamente (file tree, detección de Artisan/Composer,
+// reconstrucción de menús nativos).
+ipcMain.handle('composer:createProject', async (event, parentDir, projectName) => {
+  const args = ['create-project', 'laravel/laravel', projectName, '--no-interaction', '--ansi'];
+
+  const result = await new Promise((resolve) => {
+    execFile('composer', args, {
+      cwd: parentDir,
+      maxBuffer: config.exec.maxBuffer,
+      timeout: 600000, // 10 minutos
+    }, (err, stdout, stderr) => {
+      if (err) {
+        resolve({ output: stdout, error: stderr || err.message, code: err.code });
+      } else {
+        resolve({ output: stdout, error: stderr || null, code: 0 });
+      }
+    });
+  });
+
+  // Si fue exitoso, abrir el proyecto recién creado en el editor
+  if (result.code === 0 || (!result.error && result.output)) {
+    const projectPath = path.join(parentDir, projectName);
+    saveRecentFolder(projectPath);
+    createMenu();
+    mainWindow?.webContents.send('folder:opened', projectPath);
+  }
+
+  return result;
+});
+
+// Diálogo para elegir una carpeta destino (usado por New Laravel Project).
+// Separado del openFolder porque tiene título y botón distintos,
+// y NO abre la carpeta como proyecto — solo devuelve la ruta.
+ipcMain.handle('dialog:chooseFolder', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openDirectory'],
+    title: 'Choose folder for new project',
+    buttonLabel: 'Select Folder',
+  });
+  if (result.canceled || !result.filePaths[0]) return { canceled: true };
+  return { canceled: false, path: result.filePaths[0] };
+});
+
 // Ejecutar comando de Artisan
 ipcMain.handle('artisan:exec', async (event, subcommand, args) => {
   if (!projectCapabilities.projectRoot) return { error: 'No project open' };
@@ -1634,20 +1922,6 @@ ipcMain.on('window:close', () => mainWindow?.close());
 // 17. APP LIFECYCLE — Inicio, activación y cierre de Electron
 //     whenReady → crea menú y ventana; gestiona quit y cleanup
 // ────────────────────────────────────────────
-// ── Instancia única ──
-// Evita que se abran múltiples ventanas de MojaveCode al mismo tiempo.
-// Si el usuario lanza la app de nuevo, se enfoca la ventana existente.
-const gotLock = app.requestSingleInstanceLock();
-if (!gotLock) {
-  app.quit();
-} else {
-  app.on('second-instance', () => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.focus();
-    }
-  });
-
   // app.whenReady() se resuelve cuando Electron terminó de inicializar
   // y el GPU process está listo. Es el punto de entrada principal:
   // primero armamos el menú nativo, después creamos la ventana.
@@ -1662,7 +1936,6 @@ if (!gotLock) {
       }
     });
   });
-}
 
 // Salir cuando se cierran todas las ventanas (excepto macOS)
 app.on('window-all-closed', () => {
