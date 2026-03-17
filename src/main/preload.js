@@ -69,12 +69,15 @@ contextBridge.exposeInMainWorld('api', {
   ptyWrite: (data) => ipcRenderer.send('pty:write', data),
   ptyResize: (cols, rows) => ipcRenderer.send('pty:resize', { cols, rows }),
   ptyCd: (cwd) => ipcRenderer.send('pty:cd', cwd),
+  ptyKill: () => ipcRenderer.invoke('pty:kill'),
   onPtyData: (callback) => {
     ipcRenderer.on('pty:data', (event, data) => callback(data));
   },
+  offPtyData: () => ipcRenderer.removeAllListeners('pty:data'),
   onPtyExit: (callback) => {
     ipcRenderer.on('pty:exit', (event, code) => callback(code));
   },
+  offPtyExit: () => ipcRenderer.removeAllListeners('pty:exit'),
 
   // ── Window controls (custom titlebar) ──
   windowMinimize: () => ipcRenderer.send('window:minimize'),
@@ -164,6 +167,9 @@ contextBridge.exposeInMainWorld('api', {
   // ── Laravel Route List ──
   laravelRouteList: () => ipcRenderer.invoke('laravel:routeList'),
 
+  // ── Claude Panel ──
+  claudeRead: (folder) => ipcRenderer.invoke('claude:read', folder),
+
   // ── Search ──
   searchInFiles: (rootDir, query, options) => ipcRenderer.invoke('search:inFiles', rootDir, query, options),
   searchSymbols: (rootDir) => ipcRenderer.invoke('search:symbols', rootDir),
@@ -204,6 +210,11 @@ contextBridge.exposeInMainWorld('api', {
   platform: process.platform, // 'win32', 'darwin', 'linux'
   getFileIcon: (filename) => getIcon(filename).svg,
   syncTheme: (theme) => ipcRenderer.send('theme:sync', theme),
+  syncCustomThemes: (themes) => ipcRenderer.send('theme:syncCustom', themes),
+  onMenuGenerateTheme: (callback) => ipcRenderer.on('menu:generate-theme', callback),
+  onMenuDeleteTheme: (callback) => {
+    ipcRenderer.on('menu:delete-theme', (event, themeId) => callback(themeId));
+  },
   getMemoryUsage: () => process.memoryUsage(),
   getCpuUsage: () => ipcRenderer.invoke('system:cpuUsage'),
 });

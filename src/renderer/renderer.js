@@ -973,6 +973,7 @@ const specialTabs = [
   { match: '__db-viewer__',       container: 'db-viewer-container',      display: 'flex',  label: 'Database' },
   { match: '__route-list__',      container: 'route-list-container',     display: 'flex',  label: 'Routes' },
   { match: '__log:',             container: 'log-viewer-container',     display: 'flex',  label: 'Log', prefix: true },
+  { match: '__claude-detail__', container: 'claude-detail-container',  display: 'flex',  label: 'Claude', prefix: true },
 ];
 
 function activateTab(tab) {
@@ -1064,6 +1065,12 @@ function closeTab(tabPath) {
     if (!save) return;
   }
 
+  // Matar el proceso pty si el usuario cierra el tab de terminal
+  // Así la próxima vez que la abra arranca una sesión completamente nueva
+  if (tab.path === '__terminal__') {
+    window.api.ptyKill();
+  }
+
   // Limpiar diff editor si aplica (dispose editor ANTES que los models)
   if (tab.diffEditor) {
     try { tab.diffEditor.dispose(); } catch { /* already disposed */ }
@@ -1094,10 +1101,11 @@ function closeTab(tabPath) {
       state.activeTab = null;
       document.getElementById('welcome').style.display = 'flex';
       document.getElementById('editor-container').style.display = 'none';
-      document.getElementById('terminal-container').style.display = 'none';
-      document.getElementById('git-graph-container').style.display = 'none';
-      document.getElementById('diff-container').style.display = 'none';
-      document.getElementById('errorlog-container').style.display = 'none';
+      // Ocultar todos los containers especiales para que no quede
+      // ninguno visible debajo del welcome screen
+      for (const s of specialTabs) {
+        document.getElementById(s.container).style.display = 'none';
+      }
       updateOutline();
     }
   }
@@ -1110,6 +1118,11 @@ function closeAllTabs() {
   if (unsaved.length > 0) {
     const close = confirm(`${unsaved.length} file(s) with unsaved changes. Close all without saving?`);
     if (!close) return;
+  }
+
+  // Matar el pty si hay un tab de terminal abierto
+  if (state.openTabs.some((t) => t.path === '__terminal__')) {
+    window.api.ptyKill();
   }
 
   // Disponer todos los models y diff editors (proteger contra doble dispose)
@@ -1715,6 +1728,13 @@ function toggleTerminal() {
     };
     state.openTabs.push(tab);
     activateTab(tab);
+    // Limpiar el buffer viejo y arrancar un pty completamente nuevo.
+    // Si el tab se cerró antes, el pty fue matado en closeTab,
+    // así que necesitamos un nuevo spawn para que la terminal funcione.
+    if (state.terminal) {
+      state.terminal.clear();
+      window.api.ptySpawn(state.currentFolder || undefined);
+    }
   }
 }
 
@@ -2324,6 +2344,7 @@ function showExplorerPanel() {
   document.getElementById('git-panel').style.display = 'none';
   document.getElementById('search-panel').style.display = 'none';
   document.getElementById('log-panel').style.display = 'none';
+  document.getElementById('claude-panel').style.display = 'none';
   document.getElementById('sidebar-header').querySelector('span').textContent =
     state.currentFolder
       ? state.currentFolder.split(/[/\\]/).pop().toUpperCase()
@@ -2341,6 +2362,7 @@ function showGitPanel() {
   document.getElementById('git-panel').style.display = 'flex';
   document.getElementById('search-panel').style.display = 'none';
   document.getElementById('log-panel').style.display = 'none';
+  document.getElementById('claude-panel').style.display = 'none';
   document.getElementById('sidebar-header').querySelector('span').textContent =
     'SOURCE CONTROL';
   setActiveActionButton('btn-toggle-git');
@@ -2376,6 +2398,7 @@ function showSearchPanel() {
   document.getElementById('git-panel').style.display = 'none';
   document.getElementById('search-panel').style.display = 'flex';
   document.getElementById('log-panel').style.display = 'none';
+  document.getElementById('claude-panel').style.display = 'none';
   document.getElementById('sidebar-header').querySelector('span').textContent = 'SEARCH';
   setActiveActionButton('btn-toggle-search');
 
@@ -2842,6 +2865,18 @@ function initEventListeners() {
   document.getElementById('status-pull').addEventListener('click', () => statusBarGitSync('pull'));
   document.getElementById('status-push').addEventListener('click', () => statusBarGitSync('push'));
   window.api.onMenuSwitchTheme((theme) => switchTheme(theme));
+  // Theme generator: abrir diálogo desde Tema > Generate Theme...
+  window.api.onMenuGenerateTheme(() => showThemeGenerator());
+
+  // Eliminar un tema custom desde Tema > Delete Theme > [nombre].
+  // Si el usuario elimina el tema que está activo, vuelve a Mojave Dark.
+  window.api.onMenuDeleteTheme((themeId) => {
+    const themes = getCustomThemes().filter(t => t.id !== themeId);
+    saveCustomThemes(themes);
+    if (localStorage.getItem('mojavecode-php-theme') === themeId) {
+      switchTheme('dark');
+    }
+  });
   window.api.onAutoSaveChanged((enabled) => { state.autoSave = enabled; });
   window.api.onFolderOpened((path) => loadFileTree(path));
   window.api.onFileOpened((path) => {
@@ -2873,28 +2908,475 @@ function initEventListeners() {
 
 // ┌──────────────────────────────────────────────────┐
 // │  8b. THEME SWITCHER                              │
-// │  Alterna entre dark y light aplicando CSS vars,  │
-// │  Monaco themes, y persistiendo en localStorage.  │
-// │  Sincroniza con el menú nativo via IPC.          │
+// │  Alterna entre dark, light y temas custom.       │
+// │                                                  │
+// │  Soporta 3 tipos de tema:                        │
+// │  - 'dark'  → built-in, CSS vars en :root         │
+// │  - 'light' → built-in, CSS vars en [data-theme]  │
+// │  - 'custom-xxx' → generado por el usuario,       │
+// │    guardado en localStorage. Las CSS vars se      │
+// │    aplican como inline styles en :root (máxima    │
+// │    prioridad CSS) y se registra un Monaco theme   │
+// │    dinámico + tema de terminal con colores ANSI.  │
+// │                                                  │
+// │  Sincroniza con el menú nativo via IPC para que  │
+// │  el radio button correcto esté marcado.          │
 // └──────────────────────────────────────────────────┘
 function switchTheme(themeName) {
-  // Aplicar CSS variables
+  // Setear el data-theme attribute. Para temas custom esto no matchea
+  // ningún selector CSS, así que las vars de :root (dark) actúan como
+  // base, y luego las sobreescribimos con inline styles.
   document.documentElement.setAttribute('data-theme', themeName);
 
-  // Aplicar Monaco theme
-  const monacoTheme = themeName === 'light' ? 'mojavecode-php-light' : 'mojavecode-php-dark';
-  monaco.editor.setTheme(monacoTheme);
+  // Buscar si es un tema custom del usuario
+  const customThemes = getCustomThemes();
+  const custom = customThemes.find(t => t.id === themeName);
 
-  // Persistir preferencia y sincronizar menú nativo
+  if (custom) {
+    // ── Tema custom ──
+    // 1. CSS vars → inline en :root (overridean las de [data-theme])
+    applyCustomThemeVars(custom);
+    // 2. Monaco → registrar y activar tema dinámico
+    const monacoId = `mojavecode-custom-${custom.id}`;
+    registerCustomMonacoTheme(monacoId, custom);
+    monaco.editor.setTheme(monacoId);
+    // 3. Terminal → actualizar los 16 colores ANSI + fondo/cursor
+    if (state.terminal) {
+      state.terminal.options.theme = generateTerminalTheme(custom);
+    }
+  } else {
+    // ── Tema built-in (dark/light) ──
+    // Limpiar cualquier inline style que haya dejado un tema custom previo.
+    // Sin esto, las vars del custom quedarían pegadas sobre el built-in.
+    document.documentElement.style.cssText = '';
+    const monacoTheme = themeName === 'light' ? 'mojavecode-php-light' : 'mojavecode-php-dark';
+    monaco.editor.setTheme(monacoTheme);
+    // Restaurar colores de terminal al tema Mojave Dark original
+    if (state.terminal && themeName === 'dark') {
+      state.terminal.options.theme = {
+        background: '#0a1420', foreground: '#F4E2CE', cursor: '#E85324',
+        cursorAccent: '#0a1420', selectionBackground: '#26476980',
+        black: '#0d1a2a', red: '#EA6E40', green: '#3fb950', yellow: '#F7A73E',
+        blue: '#247D9D', magenta: '#C4A882', cyan: '#2dd4bf', white: '#F4E2CE',
+        brightBlack: '#6B87A8', brightRed: '#F5663C', brightGreen: '#3fb950',
+        brightYellow: '#F5B25C', brightBlue: '#2dd4bf', brightMagenta: '#F1D7BA',
+        brightCyan: '#2dd4bf', brightWhite: '#FEFAF7',
+      };
+    }
+  }
+
   localStorage.setItem('mojavecode-php-theme', themeName);
   window.api.syncTheme(themeName);
 }
 
 function initThemeMenu() {
+  // Sincronizar temas custom con el main process para que aparezcan en el menú
+  const customThemes = getCustomThemes();
+  if (customThemes.length > 0) {
+    window.api.syncCustomThemes(customThemes.map(t => ({ id: t.id, name: t.name })));
+  }
+
   // Restaurar tema guardado al iniciar
   const saved = localStorage.getItem('mojavecode-php-theme') || 'dark';
   switchTheme(saved);
 }
+
+// ┌──────────────────────────────────────────────────┐
+// │  8b-2. THEME GENERATOR                           │
+// │  Genera temas completos a partir de 3 colores:   │
+// │  fondo, acento y texto. Calcula variantes para   │
+// │  CSS, Monaco Editor y xterm.js terminal.         │
+// │                                                  │
+// │  Los temas custom se guardan en localStorage     │
+// │  y aparecen en el menú nativo Tema junto a los   │
+// │  temas built-in (Dark/Light).                    │
+// │                                                  │
+// │  ALGORITMO DE GENERACIÓN:                        │
+// │  1. Del color de fondo se derivan ~10 variantes  │
+// │     (lighten/darken) para hover, active, border, │
+// │     sidebar, tabs, terminal, etc.                │
+// │  2. Del acento se derivan colores complementarios│
+// │     (rotaciones de hue) para syntax highlighting │
+// │  3. Del texto se derivan primary/secondary/muted │
+// │  4. Se detecta si es dark/light por luminosidad  │
+// └──────────────────────────────────────────────────┘
+
+/** Persistencia de temas custom en localStorage */
+function getCustomThemes() {
+  try {
+    return JSON.parse(localStorage.getItem('mojavecode-custom-themes') || '[]');
+  } catch { return []; }
+}
+
+function saveCustomThemes(themes) {
+  localStorage.setItem('mojavecode-custom-themes', JSON.stringify(themes));
+  // Notificar al main process para reconstruir el menú Tema
+  window.api.syncCustomThemes(themes.map(t => ({ id: t.id, name: t.name })));
+}
+
+// ── Utilidades de color ──
+// Funciones puras para manipulación de colores usadas por el generador
+// de temas. Trabajan con hex (#RRGGBB) y convierten internamente a
+// RGB o HSL según la operación.
+//
+// Cadena de conversión: hex → RGB → HSL → manipular → HSL → RGB → hex
+//
+// Se usan 4 operaciones principales:
+// - adjustLightness: aclarar/oscurecer (para variantes de fondo)
+// - mixColors: mezclar dos colores (para text-secondary/muted)
+// - rotateHue: rotar el matiz (para colores de sintaxis)
+// - luminance: detectar si un fondo es dark o light
+
+/** hex "#RRGGBB" → [R, G, B] (0-255) */
+function hexToRgb(hex) {
+  const n = parseInt(hex.replace('#', ''), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+/** [R, G, B] (0-255) → hex "#rrggbb" */
+function rgbToHex(r, g, b) {
+  return '#' + [r, g, b].map(c => Math.max(0, Math.min(255, Math.round(c))).toString(16).padStart(2, '0')).join('');
+}
+
+/** [R, G, B] (0-255) → [H, S, L] (H: 0-360, S: 0-100, L: 0-100) */
+function rgbToHsl(r, g, b) {
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  let h, s, l = (max + min) / 2;
+  if (max === min) { h = s = 0; }
+  else {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+    else if (max === g) h = ((b - r) / d + 2) / 6;
+    else h = ((r - g) / d + 4) / 6;
+  }
+  return [h * 360, s * 100, l * 100];
+}
+
+/** [H, S, L] → hex "#rrggbb" */
+function hslToHex(h, s, l) {
+  h /= 360; s /= 100; l /= 100;
+  let r, g, b;
+  if (s === 0) { r = g = b = l; }
+  else {
+    const hue2rgb = (p, q, t) => {
+      if (t < 0) t += 1; if (t > 1) t -= 1;
+      if (t < 1/6) return p + (q - p) * 6 * t;
+      if (t < 1/2) return q;
+      if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+      return p;
+    };
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    r = hue2rgb(p, q, h + 1/3);
+    g = hue2rgb(p, q, h);
+    b = hue2rgb(p, q, h - 1/3);
+  }
+  return rgbToHex(r * 255, g * 255, b * 255);
+}
+
+/**
+ * Ajustar la luminosidad de un color.
+ * amount positivo = aclarar, negativo = oscurecer.
+ * Ejemplo: adjustLightness('#1a1a2e', 8) → un poco más claro
+ */
+function adjustLightness(hex, amount) {
+  const [r, g, b] = hexToRgb(hex);
+  const [h, s, l] = rgbToHsl(r, g, b);
+  return hslToHex(h, s, Math.max(0, Math.min(100, l + amount)));
+}
+
+/**
+ * Mezclar dos colores con un factor de interpolación.
+ * factor 0 = 100% color1, factor 1 = 100% color2.
+ * Usado para generar text-secondary (25% blend) y text-muted (55% blend).
+ */
+function mixColors(hex1, hex2, factor) {
+  const [r1, g1, b1] = hexToRgb(hex1);
+  const [r2, g2, b2] = hexToRgb(hex2);
+  return rgbToHex(
+    r1 + (r2 - r1) * factor,
+    g1 + (g2 - g1) * factor,
+    b1 + (b2 - b1) * factor
+  );
+}
+
+/**
+ * Luminosidad percibida (fórmula ITU-R BT.601).
+ * Devuelve 0-1. Si < 0.5, el color es "oscuro" y necesita texto claro.
+ * Usada para decidir si un tema custom es dark o light automáticamente.
+ */
+function luminance(hex) {
+  const [r, g, b] = hexToRgb(hex);
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+}
+
+/**
+ * Rotar el matiz (hue) de un color en la rueda cromática.
+ * Mantiene la saturación y luminosidad originales.
+ * Ejemplo: rotateHue('#e94560', 160) → color complementario para functions.
+ *
+ * Rotaciones usadas por el generador:
+ *   +40  → numbers    +100 → strings    +130 → tags
+ *   +160 → functions  +200 → blue UI    +220 → variables
+ */
+function rotateHue(hex, degrees) {
+  const [r, g, b] = hexToRgb(hex);
+  const [h, s, l] = rgbToHsl(r, g, b);
+  return hslToHex((h + degrees) % 360, s, l);
+}
+
+/**
+ * Generar un tema completo a partir de 3 colores.
+ * Devuelve un objeto con id, name, colors (los 3 inputs),
+ * vars (CSS variables), isDark, y colores derivados para
+ * syntax highlighting.
+ */
+function generateThemeFromColors(name, bgColor, accentColor, textColor) {
+  const isDark = luminance(bgColor) < 0.5;
+  const id = 'custom-' + name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+$/, '');
+
+  // ── Derivar variantes del fondo ──
+  const bgDarkest = adjustLightness(bgColor, isDark ? -4 : 4);
+  const bgDark = bgColor;
+  const bgPanel = adjustLightness(bgColor, isDark ? 5 : -2);
+  const bgSidebar = adjustLightness(bgColor, isDark ? -2 : 3);
+  const bgHover = adjustLightness(bgColor, isDark ? 8 : -5);
+  const bgActive = adjustLightness(bgColor, isDark ? 12 : -8);
+  const bgTab = adjustLightness(bgColor, isDark ? 2 : 2);
+  const bgTabActive = adjustLightness(bgColor, isDark ? 8 : -4);
+  const bgTerminal = adjustLightness(bgColor, isDark ? -6 : 2);
+  const border = adjustLightness(bgColor, isDark ? 15 : -12);
+
+  // ── Derivar variantes del texto ──
+  const textPrimary = textColor;
+  const textSecondary = mixColors(textColor, bgColor, 0.25);
+  const textMuted = mixColors(textColor, bgColor, 0.55);
+
+  // ── Derivar colores de sintaxis desde el acento ──
+  // Rotamos el hue del acento para generar colores complementarios
+  const syntaxKeyword = accentColor;
+  const syntaxFunction = rotateHue(accentColor, 160);
+  const syntaxString = rotateHue(accentColor, 100);
+  const syntaxNumber = rotateHue(accentColor, 40);
+  const syntaxVariable = rotateHue(accentColor, 220);
+  const syntaxComment = textMuted;
+  const syntaxTag = rotateHue(accentColor, 130);
+
+  // ── Colores UI derivados del acento ──
+  const accentHover = adjustLightness(accentColor, 10);
+  const accentRed = accentColor;
+  const accentGreen = rotateHue(accentColor, 130);
+  const accentBlue = rotateHue(accentColor, 200);
+  const accentYellow = rotateHue(accentColor, 50);
+  const accentTeal = rotateHue(accentColor, 170);
+
+  return {
+    id, name, isDark,
+    colors: { bg: bgColor, accent: accentColor, text: textColor },
+    vars: {
+      '--bg-darkest': bgDarkest, '--bg-dark': bgDark, '--bg-panel': bgPanel,
+      '--bg-sidebar': bgSidebar, '--bg-hover': bgHover, '--bg-active': bgActive,
+      '--bg-tab': bgTab, '--bg-tab-active': bgTabActive, '--bg-terminal': bgTerminal,
+      '--border': border,
+      '--text-primary': textPrimary, '--text-secondary': textSecondary, '--text-muted': textMuted,
+      '--accent': accentColor, '--accent-hover': accentHover,
+      '--accent-blue': accentBlue, '--accent-teal': accentTeal,
+      '--accent-yellow': accentYellow, '--accent-red': accentRed,
+      '--accent-green': accentGreen,
+    },
+    syntax: {
+      keyword: syntaxKeyword, function: syntaxFunction, string: syntaxString,
+      number: syntaxNumber, variable: syntaxVariable, comment: syntaxComment,
+      tag: syntaxTag, type: accentHover, constant: syntaxNumber,
+    },
+  };
+}
+
+/** Aplicar las CSS variables de un tema custom al :root */
+function applyCustomThemeVars(theme) {
+  const root = document.documentElement;
+  for (const [prop, value] of Object.entries(theme.vars)) {
+    root.style.setProperty(prop, value);
+  }
+}
+
+/** Registrar un tema custom en Monaco Editor */
+function registerCustomMonacoTheme(monacoId, theme) {
+  const syn = theme.syntax;
+  const strip = (hex) => hex.replace('#', '');
+
+  monaco.editor.defineTheme(monacoId, {
+    base: theme.isDark ? 'vs-dark' : 'vs',
+    inherit: true,
+    rules: [
+      { token: 'comment', foreground: strip(syn.comment), fontStyle: 'italic' },
+      { token: 'keyword', foreground: strip(syn.keyword), fontStyle: 'bold' },
+      { token: 'string', foreground: strip(syn.string) },
+      { token: 'number', foreground: strip(syn.number) },
+      { token: 'type', foreground: strip(syn.type) },
+      { token: 'function', foreground: strip(syn.function) },
+      { token: 'variable', foreground: strip(syn.variable) },
+      { token: 'constant', foreground: strip(syn.constant), fontStyle: 'bold' },
+      { token: 'tag', foreground: strip(syn.tag) },
+      { token: 'attribute.name', foreground: strip(theme.vars['--accent-blue']) },
+      { token: 'attribute.value', foreground: strip(syn.string) },
+    ],
+    colors: {
+      'editor.background': theme.vars['--bg-panel'],
+      'editor.foreground': theme.vars['--text-primary'],
+      'editor.lineHighlightBackground': theme.vars['--bg-hover'],
+      'editor.selectionBackground': theme.vars['--bg-active'],
+      'editorCursor.foreground': theme.vars['--accent'],
+      'editorLineNumber.foreground': theme.vars['--text-muted'],
+      'editorLineNumber.activeForeground': theme.vars['--text-primary'],
+      'editor.inactiveSelectionBackground': theme.vars['--bg-active'],
+      'editorIndentGuide.background': theme.vars['--border'],
+      'editorIndentGuide.activeBackground': adjustLightness(theme.vars['--border'], 5),
+      'editorBracketMatch.border': theme.vars['--accent'],
+      'editorBracketMatch.background': theme.vars['--accent'] + '20',
+      'minimap.background': theme.vars['--bg-dark'],
+      'scrollbarSlider.background': theme.vars['--border'] + '80',
+      'scrollbarSlider.hoverBackground': theme.vars['--text-muted'] + '60',
+    },
+  });
+}
+
+/** Generar tema de terminal (colores ANSI) para un tema custom */
+function generateTerminalTheme(theme) {
+  return {
+    background: theme.vars['--bg-terminal'],
+    foreground: theme.vars['--text-primary'],
+    cursor: theme.vars['--accent'],
+    cursorAccent: theme.vars['--bg-terminal'],
+    selectionBackground: theme.vars['--bg-active'] + '80',
+    black: theme.vars['--bg-darkest'],
+    red: theme.vars['--accent-red'],
+    green: theme.vars['--accent-green'],
+    yellow: theme.vars['--accent-yellow'],
+    blue: theme.vars['--accent-blue'],
+    magenta: theme.syntax.variable,
+    cyan: theme.vars['--accent-teal'],
+    white: theme.vars['--text-primary'],
+    brightBlack: theme.vars['--text-muted'],
+    brightRed: adjustLightness(theme.vars['--accent-red'], 10),
+    brightGreen: adjustLightness(theme.vars['--accent-green'], 10),
+    brightYellow: adjustLightness(theme.vars['--accent-yellow'], 10),
+    brightBlue: adjustLightness(theme.vars['--accent-blue'], 10),
+    brightMagenta: adjustLightness(theme.syntax.variable, 10),
+    brightCyan: adjustLightness(theme.vars['--accent-teal'], 10),
+    brightWhite: adjustLightness(theme.vars['--text-primary'], 10),
+  };
+}
+
+// ── UI del Theme Generator ──
+// El diálogo tiene un mini-preview que se actualiza en tiempo real
+// cada vez que el usuario mueve un color picker. Esto le permite
+// ver cómo quedarán el sidebar, el editor (con syntax highlighting
+// de ejemplo) y la barra de estado antes de crear el tema.
+
+function showThemeGenerator() {
+  const overlay = document.getElementById('theme-gen-overlay');
+  overlay.style.display = 'flex';
+  document.getElementById('theme-gen-name').value = '';
+  document.getElementById('theme-gen-name').focus();
+  updateThemePreview();
+}
+
+function closeThemeGenerator() {
+  document.getElementById('theme-gen-overlay').style.display = 'none';
+}
+
+/**
+ * Actualizar el mini-preview en vivo.
+ * Se ejecuta en cada evento 'input' de los 3 color pickers.
+ * Calcula las mismas derivaciones que generateThemeFromColors
+ * pero solo aplica las que son visibles en el preview.
+ */
+function updateThemePreview() {
+  const bg = document.getElementById('theme-gen-bg').value;
+  const accent = document.getElementById('theme-gen-accent').value;
+  const text = document.getElementById('theme-gen-text').value;
+
+  // Actualizar los labels hex
+  document.querySelectorAll('.theme-gen-hex').forEach(span => {
+    const input = document.getElementById(span.dataset.for);
+    if (input) span.textContent = input.value;
+  });
+
+  const preview = document.getElementById('theme-gen-preview');
+  const isDark = luminance(bg) < 0.5;
+  const sidebar = adjustLightness(bg, isDark ? -2 : 3);
+  const panel = adjustLightness(bg, isDark ? 5 : -2);
+  const bar = adjustLightness(bg, isDark ? -4 : 4);
+  const muted = mixColors(text, bg, 0.55);
+  const fnColor = rotateHue(accent, 160);
+  const strColor = rotateHue(accent, 100);
+
+  preview.querySelector('.theme-preview-bar').style.background = bar;
+  preview.querySelector('.theme-preview-body').style.background = panel;
+  preview.querySelector('.theme-preview-sidebar').style.background = sidebar;
+  preview.querySelector('.theme-preview-sidebar').style.borderRight = `1px solid ${adjustLightness(bg, isDark ? 15 : -12)}`;
+  preview.querySelector('.theme-preview-editor').style.color = text;
+  preview.querySelector('.theme-preview-statusbar').style.background = bar;
+  preview.querySelectorAll('.tp-keyword').forEach(el => el.style.color = accent);
+  preview.querySelectorAll('.tp-function').forEach(el => el.style.color = fnColor);
+  preview.querySelectorAll('.tp-string').forEach(el => el.style.color = strColor);
+}
+
+/** Inicializar los event listeners del diálogo del theme generator */
+(function initThemeGenerator() {
+  const overlay = document.getElementById('theme-gen-overlay');
+  if (!overlay) return;
+
+  // Live preview cuando cambian los color pickers
+  ['theme-gen-bg', 'theme-gen-accent', 'theme-gen-text'].forEach(id => {
+    document.getElementById(id).addEventListener('input', updateThemePreview);
+  });
+
+  // Cerrar con overlay o botón cancel
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) closeThemeGenerator();
+  });
+  document.getElementById('theme-gen-cancel').addEventListener('click', closeThemeGenerator);
+
+  // Escape para cerrar
+  document.getElementById('theme-gen-name').addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeThemeGenerator();
+  });
+
+  // Crear tema
+  document.getElementById('theme-gen-apply').addEventListener('click', () => {
+    const name = document.getElementById('theme-gen-name').value.trim();
+    if (!name) {
+      document.getElementById('theme-gen-name').focus();
+      return;
+    }
+
+    const bg = document.getElementById('theme-gen-bg').value;
+    const accent = document.getElementById('theme-gen-accent').value;
+    const text = document.getElementById('theme-gen-text').value;
+
+    const theme = generateThemeFromColors(name, bg, accent, text);
+
+    // Guardar en la lista de temas custom
+    const themes = getCustomThemes();
+    // Si ya existe uno con el mismo id, reemplazarlo
+    const existIdx = themes.findIndex(t => t.id === theme.id);
+    if (existIdx !== -1) {
+      themes[existIdx] = theme;
+    } else {
+      themes.push(theme);
+    }
+    saveCustomThemes(themes);
+
+    // Aplicar el nuevo tema
+    switchTheme(theme.id);
+
+    closeThemeGenerator();
+  });
+})();
 
 // ┌──────────────────────────────────────────────────┐
 // │  8c. ERROR LOG                                   │
@@ -4467,6 +4949,7 @@ async function showLogPanel() {
   document.getElementById('git-panel').style.display = 'none';
   document.getElementById('search-panel').style.display = 'none';
   document.getElementById('log-panel').style.display = 'flex';
+  document.getElementById('claude-panel').style.display = 'none';
   document.getElementById('sidebar-header').querySelector('span').textContent = 'LOGS';
   setActiveActionButton('btn-open-logs');
 
@@ -4944,6 +5427,393 @@ function initSystemMonitor() {
   setInterval(() => { updateMem(); updateCpu(); }, 3000);
 }
 
+// ┌──────────────────────────────────────────────────┐
+// │  CLAUDE PANEL (sidebar)                           │
+// │  Panel de integración con Claude Code. Lee el     │
+// │  directorio .claude del proyecto y muestra:       │
+// │                                                   │
+// │  SKILLS — .claude/skills/*/SKILL.md               │
+// │    Skills custom del proyecto: instrucciones      │
+// │    que Claude activa automáticamente según el     │
+// │    contexto. Ej: laravel-migration, check-logs.   │
+// │    También incluye slash commands del proyecto    │
+// │    (.claude/commands/*.md).                       │
+// │                                                   │
+// │  AGENTS — .claude/agents/*.md                     │
+// │    Agentes custom: subprocesos especializados     │
+// │    con modelo, herramientas y color propios.      │
+// │                                                   │
+// │  Click en cualquier item → abre un dashboard      │
+// │  de detalle en el área del editor (tab especial)  │
+// │  con el contenido completo del archivo .md        │
+// │  renderizado con Markdown básico.                 │
+// └──────────────────────────────────────────────────┘
+
+/**
+ * Toggle del panel Claude en el sidebar.
+ * Mismo patrón que toggleGitPanel / toggleSearchPanel:
+ * si ya está activo, vuelve al explorer; si no, lo abre.
+ */
+function toggleClaudePanel() {
+  if (state.sidebarView === 'claude') {
+    showExplorerPanel();
+  } else {
+    showClaudePanel();
+  }
+}
+
+/**
+ * Activa el panel Claude en el sidebar.
+ * Oculta todos los otros paneles, cambia el título del header
+ * y dispara la carga de datos del directorio .claude.
+ */
+async function showClaudePanel() {
+  state.sidebarView = 'claude';
+  document.getElementById('explorer-sections').style.display = 'none';
+  document.getElementById('git-panel').style.display = 'none';
+  document.getElementById('search-panel').style.display = 'none';
+  document.getElementById('log-panel').style.display = 'none';
+  document.getElementById('claude-panel').style.display = 'flex';
+  document.getElementById('sidebar-header').querySelector('span').textContent = 'CLAUDE';
+  setActiveActionButton('btn-claude-panel');
+
+  if (state.gitRefreshTimer) {
+    clearInterval(state.gitRefreshTimer);
+    state.gitRefreshTimer = null;
+  }
+
+  await renderClaudePanel();
+}
+
+/**
+ * Carga y renderiza el panel lateral de Claude.
+ *
+ * Pide al main process los datos del directorio .claude via IPC
+ * y construye el HTML de las secciones SKILLS y AGENTS.
+ * Cada sección es colapsable y sus items son clickeables:
+ * al hacer click se abre openClaudeDetail() en el área del editor.
+ *
+ * El panel guarda una referencia a los datos en panel._claudeData
+ * para que los click handlers de los items puedan acceder al item
+ * completo (incluyendo el body del .md) sin re-fetchear.
+ */
+async function renderClaudePanel() {
+  const panel = document.getElementById('claude-panel');
+  panel.innerHTML = '<div class="db-loading">Loading .claude...</div>';
+
+  if (!state.currentFolder) {
+    panel.innerHTML = '<div class="claude-empty">Open a folder to view Claude config</div>';
+    return;
+  }
+
+  const data = await window.api.claudeRead(state.currentFolder);
+
+  if (data.error) {
+    panel.innerHTML = `<div class="db-error">${escapeHtml(data.error)}</div>`;
+    return;
+  }
+
+  if (!data.exists) {
+    panel.innerHTML = '<div class="claude-empty">No .claude directory found in this project</div>';
+    return;
+  }
+
+  const agentColorMap = {
+    red: 'var(--accent-red)',
+    green: 'var(--accent-green)',
+    yellow: 'var(--accent-yellow)',
+    blue: 'var(--accent-blue)',
+    cyan: 'var(--accent-teal)',
+  };
+
+  let html = '';
+
+  // ── helper: sección colapsable ──
+  function claudeSection(id, icon, label, count, bodyHtml) {
+    const hasContent = count > 0;
+    const badge = count > 0 ? `<span class="claude-badge">${count}</span>` : '';
+    return `<div class="claude-panel-section">
+      <div class="claude-panel-section-header" data-claude-section="${id}">
+        <span class="claude-panel-chevron">▾</span>
+        ${icon}
+        <span>${label}</span>
+        ${badge}
+      </div>
+      <div class="claude-panel-section-body" data-claude-body="${id}">
+        ${hasContent ? bodyHtml : '<div class="claude-empty-hint">None configured in .claude/</div>'}
+      </div>
+    </div>`;
+  }
+
+  // ════════════════════════════════════════════
+  // SKILLS — .claude/skills/*/SKILL.md + .claude/commands/*.md
+  // ════════════════════════════════════════════
+  let skillsHtml = '';
+  for (const [i, s] of data.skills.entries()) {
+    const versionBadge = s.version ? `<span class="claude-version-badge">v${escapeHtml(s.version)}</span>` : '';
+    skillsHtml += `<div class="claude-item claude-item-clickable" data-claude-type="skill" data-claude-idx="${i}" title="${escapeAttr(s.description)}">
+      <div class="claude-item-row">
+        <span class="claude-item-name${s.isCommand ? ' claude-item-command' : ''}">${escapeHtml(s.name)}</span>
+        ${versionBadge}
+      </div>
+      <span class="claude-item-desc">${escapeHtml(s.description)}</span>
+    </div>`;
+  }
+
+  html += claudeSection(
+    'skills',
+    '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>',
+    'SKILLS',
+    data.skills.length,
+    skillsHtml
+  );
+
+  // ════════════════════════════════════════════
+  // AGENTS — .claude/agents/*.md
+  // ════════════════════════════════════════════
+  let agentsHtml = '';
+  for (const [i, a] of data.agents.entries()) {
+    const dotColor = agentColorMap[a.color] || 'var(--text-muted)';
+    const modelBadge = a.model ? `<span class="claude-model-badge">${escapeHtml(a.model)}</span>` : '';
+    agentsHtml += `<div class="claude-item claude-item-clickable" data-claude-type="agent" data-claude-idx="${i}" title="${escapeAttr(a.description)}">
+      <div class="claude-item-row">
+        <span class="claude-agent-dot" style="background:${dotColor}"></span>
+        <span class="claude-item-name">${escapeHtml(a.name)}</span>
+        ${modelBadge}
+      </div>
+      <span class="claude-item-desc">${escapeHtml(a.description)}</span>
+    </div>`;
+  }
+
+  html += claudeSection(
+    'agents',
+    '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+    'AGENTS',
+    data.agents.length,
+    agentsHtml
+  );
+
+  // Guardar data para que los click handlers puedan acceder al contenido completo
+  panel._claudeData = data;
+
+  panel.innerHTML = html;
+
+  // ── Colapsable: toggle al clickear el header ──
+  panel.querySelectorAll('.claude-panel-section-header').forEach((header) => {
+    header.addEventListener('click', () => {
+      const body = panel.querySelector(`[data-claude-body="${header.dataset.claudeSection}"]`);
+      const chevron = header.querySelector('.claude-panel-chevron');
+      const collapsed = body.style.display === 'none';
+      body.style.display = collapsed ? '' : 'none';
+      chevron.textContent = collapsed ? '▾' : '▸';
+    });
+  });
+
+  // ── Click en item → abrir dashboard de detalle ──
+  panel.querySelectorAll('.claude-item[data-claude-type]').forEach((el) => {
+    el.addEventListener('click', () => {
+      const type = el.dataset.claudeType;
+      const idx  = parseInt(el.dataset.claudeIdx, 10);
+      const item = type === 'skill' ? data.skills[idx] : data.agents[idx];
+      if (item) openClaudeDetail(item, type);
+    });
+  });
+}
+
+/**
+ * Abre (o reactiva) el tab de detalle de un skill/agente.
+ *
+ * El tab path tiene la forma __claude-detail__:skill:nombre
+ * para que el registry de specialTabs lo reconozca y muestre
+ * claude-detail-container en el área del editor.
+ *
+ * Si el tab ya existe, lo activa sin crear un duplicado.
+ * En ambos casos llama a renderClaudeDetail() para actualizar el contenido,
+ * lo que permite hacer click en distintos items y ver el detalle en el mismo tab.
+ *
+ * @param {Object} item - El objeto skill o agent (con name, description, body, etc.)
+ * @param {string} type - 'skill' o 'agent'
+ */
+function openClaudeDetail(item, type) {
+  const tabPath = `__claude-detail__:${type}:${item.name}`;
+  const existing = state.openTabs.find((t) => t.path === tabPath);
+  if (existing) {
+    activateTab(existing);
+  } else {
+    const tab = { path: tabPath, name: item.name, model: null, language: 'claude', modified: false };
+    state.openTabs.push(tab);
+    activateTab(tab);
+  }
+  renderClaudeDetail(item, type);
+}
+
+/**
+ * Renderiza el cuerpo Markdown de un skill/agente a HTML seguro.
+ *
+ * Soporta el subconjunto de Markdown usado habitualmente en SKILL.md y
+ * archivos de agentes: bloques de código con triple backtick, encabezados
+ * h1/h2/h3, listas ordenadas y sin orden, líneas en blanco como separadores,
+ * y párrafos normales.  El formato inline (bold, italic, code) se delega a
+ * inlineMarkdown().
+ *
+ * @param {string} text - Contenido Markdown puro (sin frontmatter)
+ * @returns {string} HTML listo para inyectar en .cd-body
+ */
+function renderClaudeMarkdown(text) {
+  if (!text) return '';
+  let html = '';
+  const lines = text.split('\n');
+  let inCodeBlock = false;
+  let codeLang = '';
+  let codeLines = [];
+
+  for (const raw of lines) {
+    // Code fence start/end
+    const fenceMatch = raw.match(/^```(\w*)/);
+    if (fenceMatch && !inCodeBlock) {
+      inCodeBlock = true;
+      codeLang = fenceMatch[1];
+      codeLines = [];
+      continue;
+    }
+    if (raw.trimEnd() === '```' && inCodeBlock) {
+      inCodeBlock = false;
+      html += `<pre class="cd-code"><code class="cd-code-lang-${escapeHtml(codeLang)}">${escapeHtml(codeLines.join('\n'))}</code></pre>`;
+      codeLines = [];
+      continue;
+    }
+    if (inCodeBlock) {
+      codeLines.push(raw);
+      continue;
+    }
+
+    // Headers
+    const h3 = raw.match(/^### (.+)/);
+    const h2 = raw.match(/^## (.+)/);
+    const h1 = raw.match(/^# (.+)/);
+    if (h1) { html += `<h1 class="cd-h1">${inlineMarkdown(h1[1])}</h1>`; continue; }
+    if (h2) { html += `<h2 class="cd-h2">${inlineMarkdown(h2[1])}</h2>`; continue; }
+    if (h3) { html += `<h3 class="cd-h3">${inlineMarkdown(h3[1])}</h3>`; continue; }
+
+    // List items
+    const li = raw.match(/^[-*] (.+)/);
+    if (li) { html += `<div class="cd-li"><span class="cd-bullet">•</span>${inlineMarkdown(li[1])}</div>`; continue; }
+
+    // Numbered list
+    const oli = raw.match(/^\d+\. (.+)/);
+    if (oli) { html += `<div class="cd-li"><span class="cd-bullet cd-num">${raw.match(/^(\d+)\./)[1]}.</span>${inlineMarkdown(oli[1])}</div>`; continue; }
+
+    // Blank line → spacer
+    if (raw.trim() === '') { html += '<div class="cd-spacer"></div>'; continue; }
+
+    // Normal paragraph line
+    html += `<p class="cd-p">${inlineMarkdown(raw)}</p>`;
+  }
+
+  // Close unclosed code block
+  if (inCodeBlock && codeLines.length) {
+    html += `<pre class="cd-code"><code>${escapeHtml(codeLines.join('\n'))}</code></pre>`;
+  }
+
+  return html;
+}
+
+/**
+ * Aplica formato inline Markdown a una línea de texto ya escapada.
+ *
+ * Transforma **bold**, *italic* y `inline code` a sus equivalentes HTML.
+ * Se llama desde renderClaudeMarkdown() sobre cada línea antes de emitirla,
+ * por lo que el texto de entrada ya pasó por escapeHtml().
+ *
+ * @param {string} text - Texto plano (sin HTML previo)
+ * @returns {string} Texto con tags <strong>, <em> y <code> insertados
+ */
+function inlineMarkdown(text) {
+  return escapeHtml(text)
+    // **bold**
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    // *italic*
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    // `inline code`
+    .replace(/`([^`]+)`/g, '<code class="cd-inline-code">$1</code>');
+}
+
+/**
+ * Renderiza el dashboard de detalle de un skill o agente en claude-detail-container.
+ *
+ * LAYOUT:
+ *   ┌─ Header ─────────────────────────────────────┐
+ *   │  ● nombre   [tipo]  [modelo/versión]          │
+ *   │  Descripción completa                         │
+ *   │  [tool] [tool] [tool]                         │
+ *   ├──────────────────────────────────────────────┤
+ *   │  Cuerpo del archivo .md renderizado           │
+ *   │  (headers, bold, code blocks, listas)         │
+ *   └──────────────────────────────────────────────┘
+ *
+ * El punto de color (cd-dot) se muestra solo para agentes que tienen
+ * un color definido en su frontmatter.  Los badges de modelo y versión
+ * son opcionales y solo aparecen si el item los tiene.
+ *
+ * @param {Object} item - El objeto skill o agent (con name, description, body, etc.)
+ * @param {string} type - 'skill', 'agent' o 'command'
+ */
+function renderClaudeDetail(item, type) {
+  const container = document.getElementById('claude-detail-container');
+
+  const agentColorMap = {
+    red: 'var(--accent-red)',
+    green: 'var(--accent-green)',
+    yellow: 'var(--accent-yellow)',
+    blue: 'var(--accent-blue)',
+    cyan: 'var(--accent-teal)',
+  };
+
+  // ── Header ──
+  const isAgent  = type === 'agent';
+  const dotColor = isAgent && item.color ? agentColorMap[item.color] || 'var(--text-muted)' : null;
+  const dotHtml  = dotColor ? `<span class="cd-dot" style="background:${dotColor}"></span>` : '';
+
+  const modelBadge = item.model
+    ? `<span class="cd-meta-badge">${escapeHtml(item.model)}</span>` : '';
+  const versionBadge = item.version
+    ? `<span class="cd-meta-badge">v${escapeHtml(item.version)}</span>` : '';
+  const typeBadge = `<span class="cd-type-badge cd-type-${type}">${isAgent ? 'agent' : (item.isCommand ? 'command' : 'skill')}</span>`;
+
+  // ── Tools ──
+  const toolsHtml = item.tools
+    ? `<div class="cd-tools-row">${item.tools.split(',').map((t) =>
+        `<span class="cd-tool-chip">${escapeHtml(t.trim())}</span>`).join('')}</div>` : '';
+
+  container.innerHTML = `
+    <div class="cd-root">
+      <div class="cd-header">
+        <div class="cd-title-row">
+          ${dotHtml}
+          <h1 class="cd-title">${escapeHtml(item.name)}</h1>
+          ${typeBadge}
+          ${modelBadge}
+          ${versionBadge}
+        </div>
+        <p class="cd-description">${escapeHtml(item.description)}</p>
+        ${toolsHtml}
+      </div>
+      <div class="cd-divider"></div>
+      <div class="cd-body">${renderClaudeMarkdown(item.body)}</div>
+    </div>
+  `;
+}
+
+/**
+ * Conecta el botón del panel Claude en la barra de acción de la sidebar.
+ *
+ * El botón (btn-claude-panel) alterna entre el panel de explorador de archivos
+ * y el panel de integración con Claude Code.  Se llama una sola vez desde init().
+ */
+function initClaudePanel() {
+  document.getElementById('btn-claude-panel').addEventListener('click', () => toggleClaudePanel());
+}
+
 (function init() {
   initEditor();
   initThemeMenu();
@@ -4958,6 +5828,7 @@ function initSystemMonitor() {
   initComposerArtisan();
   initPhpTools();
   initDbAndRoutes();
+  initClaudePanel();
   initTreeContextMenu();
   initSidebarResize();
   renderRecentFolders(); // Mostrar carpetas recientes en la welcome screen

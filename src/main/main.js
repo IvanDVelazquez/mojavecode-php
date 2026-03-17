@@ -124,6 +124,9 @@ let mainWindow;
 let ptyProcess;
 let lspManager = null;
 
+// ── Temas custom del usuario (sincronizados desde el renderer) ──
+let customThemeEntries = []; // Array de { id, name }
+
 // ── Estado de detección de proyecto ──
 let projectCapabilities = {
   hasComposer: false,
@@ -342,6 +345,19 @@ function createMenu() {
         },
       ],
     },
+    // ── Tema Menu ──
+    // Combina los 2 temas built-in (Dark/Light) con los temas custom
+    // que el usuario haya generado. Los custom se sincronizan desde el
+    // renderer via IPC 'theme:syncCustom' al iniciar y al crear/eliminar.
+    //
+    // Estructura del menú:
+    // - Mojave Dark (radio)
+    // - Mojave Light (radio)
+    // - ── separator (solo si hay custom) ──
+    // - [Temas custom como radio buttons]
+    // - ── separator ──
+    // - Generate Theme... (abre el diálogo en el renderer)
+    // - Delete Theme > [submenu] (solo si hay custom)
     {
       label: 'Tema',
       submenu: [
@@ -356,6 +372,28 @@ function createMenu() {
           type: 'radio',
           click: () => mainWindow?.webContents.send('menu:switch-theme', 'light'),
         },
+        // Temas custom del usuario (sincronizados desde localStorage del renderer)
+        ...(customThemeEntries.length > 0 ? [
+          { type: 'separator' },
+          ...customThemeEntries.map(t => ({
+            label: t.name,
+            type: 'radio',
+            click: () => mainWindow?.webContents.send('menu:switch-theme', t.id),
+          })),
+        ] : []),
+        { type: 'separator' },
+        {
+          label: 'Generate Theme...',
+          click: () => mainWindow?.webContents.send('menu:generate-theme'),
+        },
+        // Submenu para eliminar temas custom (solo si hay alguno creado)
+        ...(customThemeEntries.length > 0 ? [{
+          label: 'Delete Theme',
+          submenu: customThemeEntries.map(t => ({
+            label: t.name,
+            click: () => mainWindow?.webContents.send('menu:delete-theme', t.id),
+          })),
+        }] : []),
       ],
     },
     // ── Composer Menu ──
@@ -539,7 +577,7 @@ function createMenu() {
             dialog.showMessageBox(mainWindow, {
               type: 'info',
               title: 'MojaveCode PHP',
-              message: 'MojaveCode PHP v2.1.0',
+              message: 'MojaveCode PHP v2.3.0',
               detail: 'A lightweight code editor by MojaveWare.\nBuilt with Electron + Monaco + xterm.js',
             });
           },
@@ -1043,6 +1081,16 @@ ipcMain.on('pty:resize', (event, { cols, rows }) => {
   }
 });
 
+// Matar el pty actual (cuando el usuario cierra la terminal tab)
+// Permite que al reabrir se inicie una terminal completamente nueva
+ipcMain.handle('pty:kill', () => {
+  if (ptyProcess) {
+    try { ptyProcess.kill(); } catch { /* already exited */ }
+    ptyProcess = null;
+  }
+  return { success: true };
+});
+
 // Cambiar directorio del pty de forma segura (evita inyección de comandos)
 ipcMain.on('pty:cd', (event, cwd) => {
   if (ptyProcess && cwd) {
@@ -1304,10 +1352,28 @@ ipcMain.on('theme:sync', (event, themeName) => {
   if (!menu) return;
   const temaMenu = menu.items.find((m) => m.label === 'Tema');
   if (!temaMenu || !temaMenu.submenu) return;
+
+  // Actualizar radio buttons: desmarcar todos, marcar el activo
   temaMenu.submenu.items.forEach((item) => {
-    if (item.label === 'Mojave Dark') item.checked = themeName === 'dark';
-    if (item.label === 'Mojave Light') item.checked = themeName === 'light';
+    if (item.type === 'radio') {
+      // Built-in: comparar por themeName directo
+      if (item.label === 'Mojave Dark') item.checked = themeName === 'dark';
+      else if (item.label === 'Mojave Light') item.checked = themeName === 'light';
+      // Custom: comparar por id del tema
+      else {
+        const custom = customThemeEntries.find(t => t.name === item.label);
+        item.checked = custom ? custom.id === themeName : false;
+      }
+    }
   });
+});
+
+// Sincronizar lista de temas custom desde el renderer.
+// Se llama al crear o eliminar un tema. Reconstruye el menú
+// para que los nuevos temas aparezcan en Tema > ...
+ipcMain.on('theme:syncCustom', (event, themes) => {
+  customThemeEntries = themes || [];
+  createMenu();
 });
 
 // ────────────────────────────────────────────
@@ -1812,7 +1878,183 @@ ipcMain.handle('laravel:routeList', async (event) => {
 });
 
 // ────────────────────────────────────────────
-// 15. IPC HANDLERS — COMPOSER & ARTISAN
+// 15. IPC HANDLERS — CLAUDE PANEL
+//     Lee el directorio .claude del proyecto para
+//     mostrar skills y agentes custom en el sidebar.
+//
+//     ESTRUCTURA QUE ENTIENDE:
+//       .claude/skills/*/SKILL.md   → skills con frontmatter YAML
+//       .claude/commands/*.md       → slash commands del proyecto
+//       .claude/agents/*.md         → agentes custom con frontmatter
+//
+//     El directorio .claude puede no estar en la carpeta
+//     que el usuario abrió: sube por el filesystem hasta
+//     encontrarlo (mismo comportamiento de Claude Code).
+// ────────────────────────────────────────────
+
+/**
+ * Lee y parsea el directorio .claude del proyecto abierto.
+ *
+ * Devuelve un objeto con dos listas:
+ *   - skills: skills custom + slash commands del proyecto
+ *   - agents: agentes custom con metadata (modelo, color, herramientas)
+ *
+ * Cada item incluye el `body` (contenido del .md sin el frontmatter)
+ * para mostrarlo en el dashboard de detalle al hacer click en el sidebar.
+ *
+ * @param {string} folder - Carpeta abierta en el editor (state.currentFolder del renderer)
+ * @returns {Object} { exists, projectRoot, skills[], agents[] } o { error }
+ */
+ipcMain.handle('claude:read', async (event, folder) => {
+  if (!folder) return { error: 'No folder open' };
+
+  // Buscar .claude subiendo desde la carpeta abierta hasta la raíz del filesystem.
+  //
+  // Claude Code coloca .claude en la raíz git del proyecto, que puede no coincidir
+  // con la carpeta que el usuario abrió. Por ejemplo, si abrió src/ dentro de un
+  // monorepo, .claude está dos niveles más arriba.
+  //
+  // Usamos el mismo algoritmo que Claude Code: subir directorio por directorio
+  // hasta encontrar .claude o llegar a la raíz del filesystem.
+  let claudeDir = null;
+  let projectRoot = null;
+  let current = folder;
+  while (true) {
+    const candidate = path.join(current, '.claude');
+    if (fs.existsSync(candidate)) {
+      claudeDir = candidate;
+      projectRoot = current;
+      break;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) break; // raíz del filesystem — no encontrado
+    current = parent;
+  }
+
+  /**
+   * Parsea el frontmatter YAML de un archivo .md.
+   * Solo soporta el subset que usa Claude Code: key: value en líneas simples.
+   * No intenta parsear arrays, objetos anidados ni strings multilinea.
+   *
+   * @param {string} content - Contenido completo del archivo .md
+   * @returns {Object} Pares clave-valor del frontmatter
+   */
+  function parseFrontmatter(content) {
+    const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+    if (!match) return {};
+    const fm = {};
+    for (const line of match[1].split('\n')) {
+      const kv = line.match(/^(\w[\w-]*):\s*(.+)$/);
+      if (kv) fm[kv[1]] = kv[2].trim();
+    }
+    return fm;
+  }
+
+  /**
+   * Extrae el cuerpo del archivo: todo lo que viene después del bloque ---frontmatter---
+   * Este es el contenido Markdown que se muestra en el dashboard de detalle.
+   *
+   * @param {string} content - Contenido completo del archivo .md
+   * @returns {string} Cuerpo sin frontmatter, con whitespace inicial removido
+   */
+  function extractBody(content) {
+    return content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '').trim();
+  }
+
+  try {
+    if (!claudeDir) return { exists: false };
+
+    const result = {
+      exists: true,
+      projectRoot,
+      skills: [],  // skills (.claude/skills/) + slash commands (.claude/commands/)
+      agents: [],  // agentes custom (.claude/agents/)
+    };
+
+    // ── SKILLS: .claude/skills/*/SKILL.md ──────────────────────────────
+    //
+    // Cada skill vive en su propia carpeta:
+    //   .claude/skills/laravel-migration/SKILL.md
+    //   .claude/skills/check-logs/SKILL.md
+    //
+    // El frontmatter define: name, description, version, tools
+    // El body contiene las instrucciones completas para Claude
+    const skillsDir = path.join(claudeDir, 'skills');
+    if (fs.existsSync(skillsDir)) {
+      for (const skillFolder of fs.readdirSync(skillsDir).sort()) {
+        const skillMd = path.join(skillsDir, skillFolder, 'SKILL.md');
+        if (!fs.existsSync(skillMd)) continue;
+        const content = fs.readFileSync(skillMd, 'utf8');
+        const fm = parseFrontmatter(content);
+        result.skills.push({
+          name:        fm.name || skillFolder,
+          description: fm.description || '',
+          version:     fm.version || null,
+          tools:       fm.tools || null,
+          body:        extractBody(content),
+        });
+      }
+    }
+
+    // ── SLASH COMMANDS: .claude/commands/*.md ──────────────────────────
+    //
+    // Los comandos son archivos .md en la raíz de commands/ (no subcarpetas):
+    //   .claude/commands/deploy.md  →  /deploy
+    //   .claude/commands/review.md  →  /review
+    //
+    // Se agregan a la misma lista de skills pero con isCommand: true
+    // para que el renderer los muestre con el prefijo "/" y en teal
+    const commandsDir = path.join(claudeDir, 'commands');
+    if (fs.existsSync(commandsDir)) {
+      for (const file of fs.readdirSync(commandsDir).filter((f) => f.endsWith('.md')).sort()) {
+        const content = fs.readFileSync(path.join(commandsDir, file), 'utf8');
+        const fm = parseFrontmatter(content);
+        // La descripción puede venir del frontmatter (clave "description")
+        // o de la primera línea no vacía del archivo (título # del comando)
+        const fallbackDesc = content.split('\n').find((l) => l.trim())?.replace(/^#+\s*/, '') || '';
+        result.skills.push({
+          name:        '/' + file.replace('.md', ''),
+          description: fm.description || fallbackDesc,
+          version:     null,
+          tools:       fm['allowed-tools'] || null,
+          isCommand:   true,
+          body:        extractBody(content),
+        });
+      }
+    }
+
+    // ── AGENTES: .claude/agents/*.md ──────────────────────────────────
+    //
+    // Cada agente es un archivo .md con frontmatter:
+    //   name        → identificador del agente
+    //   description → cuándo y para qué usarlo
+    //   model       → override del modelo (sonnet / opus / haiku)
+    //   color       → color visual del dot en la UI (red/green/yellow/blue/cyan)
+    //   tools       → herramientas disponibles para el agente
+    const agentsDir = path.join(claudeDir, 'agents');
+    if (fs.existsSync(agentsDir)) {
+      for (const file of fs.readdirSync(agentsDir).filter((f) => f.endsWith('.md')).sort()) {
+        const content = fs.readFileSync(path.join(agentsDir, file), 'utf8');
+        const fm = parseFrontmatter(content);
+        result.agents.push({
+          name:        fm.name || file.replace('.md', ''),
+          description: fm.description || '',
+          model:       fm.model || null,
+          color:       fm.color || null,
+          tools:       fm.tools || null,
+          body:        extractBody(content),
+        });
+      }
+    }
+
+    return result;
+  } catch (e) {
+    return { error: e.message };
+  }
+});
+
+// ────────────────────────────────────────────
+// 16. IPC HANDLERS — COMPOSER & ARTISAN
 //     Ejecuta comandos de Composer y Artisan en el proyecto
 // ────────────────────────────────────────────
 
@@ -1905,7 +2147,7 @@ ipcMain.handle('artisan:exec', async (event, subcommand, args) => {
 });
 
 // ────────────────────────────────────────────
-// 16. IPC HANDLERS — WINDOW CONTROLS (custom titlebar)
+// 17. IPC HANDLERS — WINDOW CONTROLS (custom titlebar)
 //     Minimize, maximize/restore, close
 // ────────────────────────────────────────────
 ipcMain.on('window:minimize', () => mainWindow?.minimize());

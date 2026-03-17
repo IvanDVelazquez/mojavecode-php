@@ -132,7 +132,7 @@ Electron-builder technically supports some cross-compilation scenarios, but `nod
 
 ### Editor Core
 - **Monaco Editor** — the same engine behind VS Code, with syntax highlighting for 30+ languages
-- **Two themes** — Mojave Dark (deep blues + sunset orange) and Mojave Light (warm sand + deep blue), switchable from the native macOS menu bar
+- **Themes** — Mojave Dark and Mojave Light built-in, plus a **theme generator** to create unlimited custom themes from 3 colors (background, accent, text). Custom themes are persisted across sessions and appear in the native menu bar
 - **Tab management** — unsaved change warnings, modified indicators, **drag & drop reordering**, multiple special tabs (terminal, git graph, diff, output, database, routes, logs)
 - **Diff view** — side-by-side comparison for staged and unstaged git changes
 - **Zoom** (`Cmd+=` / `Cmd+-` / `Cmd+0`) — adjusts editor font size from 8px to 40px with proportional line height. Percentage indicator in the status bar (click to reset). Persisted across sessions via localStorage
@@ -202,6 +202,16 @@ Accessible from the sidebar action bar. Reads all log files from `storage/logs` 
 - Starts in the project root directory and resets when switching projects
 - Full color support, clickable URLs, smooth scrolling
 - Auto-resizes with the editor layout
+- **Clean session lifecycle** — closing the terminal tab kills the underlying pty process; reopening always spawns a fresh shell with a clean environment
+
+### Claude Code Integration
+A sidebar panel (lightbulb icon in the action bar) that reads the project's `.claude/` directory and surfaces your custom Claude Code extensions:
+
+- **SKILLS** — displays custom skills from `.claude/skills/*/SKILL.md` and slash commands from `.claude/commands/*.md`. Each entry shows its name and up to 5 lines of description
+- **AGENTS** — displays custom agents from `.claude/agents/*.md` with their model and color indicator
+- **Directory walk-up** — automatically finds the `.claude/` directory by climbing the filesystem from the current project folder, so nested sub-projects are handled correctly
+- **Detail dashboard** — click any skill, command, or agent to open a dedicated tab with the full rendered Markdown content, type/model/version badges, and a chip list of declared tools
+- Frontmatter fields parsed: `name`, `description`, `model`, `version`, `tools`, `color`
 
 ### Git Integration
 - **Source Control panel** — staged, unstaged, and untracked files with one-click stage/unstage/discard
@@ -214,7 +224,7 @@ Accessible from the sidebar action bar. Reads all log files from `storage/logs` 
 - **Diff view** — opens when clicking files in the git panel
 
 ### UI & Navigation
-- **Sidebar action bar** with quick access to Search, Terminal, Git, Database, Routes, and Logs
+- **Sidebar action bar** with quick access to Search, Terminal, Git, Database, Routes, Logs, and Claude Code integration
 - **File tree** with lazy-loading, material file icons, **auto-reveal** (activating a tab expands and scrolls to the file in the tree, like VS Code's "Reveal in Side Bar"), and **right-click context menu** (Copy Path, Copy, Paste, Delete)
 - **Resizable sidebar** — drag the right edge to adjust width (150px–600px)
 - **Breadcrumb bar** — shows the relative path of the active file between the tab bar and the editor, making it easy to distinguish files with the same name in different directories
@@ -317,7 +327,7 @@ Secure bridge via `contextBridge.exposeInMainWorld`. Every IPC channel is explic
 
 ### Renderer (`renderer.js`)
 
-Single-page application with centralized mutable state. Organized in numbered sections covering editor initialization, terminal (with auto git branch refresh), file tree (with context menu and auto-reveal), tabs (with drag & drop reordering), save (with auto-save), breadcrumb bar, language detection, UI toggles (sidebar resize), git panel, branch picker (command palette-style branch switcher), theme switching, error log, quick open, search panel, symbol search, database viewer, route list, log viewer (formatted with search and filters), Composer/Artisan integration (including New Laravel Project), PHP tools, and system monitoring.
+Single-page application with centralized mutable state. Organized in numbered sections covering editor initialization, terminal (with auto git branch refresh and clean pty lifecycle), file tree (with context menu and auto-reveal), tabs (with drag & drop reordering), save (with auto-save), breadcrumb bar, language detection, UI toggles (sidebar resize), git panel, branch picker (command palette-style branch switcher), theme switching and custom theme generator (color derivation engine with live preview), error log, quick open, search panel, symbol search, database viewer, route list, log viewer (formatted with search and filters), Composer/Artisan integration (including New Laravel Project), PHP tools, system monitoring, and Claude Code integration panel (skills, commands, agents with detail dashboard).
 
 ### LSP Client (`lsp-client.js`)
 
@@ -325,11 +335,20 @@ Connects Monaco to Intelephense with providers for completion, hover, definition
 
 ### Theming
 
-CSS variables in `[data-theme="dark"]` / `[data-theme="light"]`. Theme switching is instant — updates CSS vars, Monaco theme, and native menu radio buttons in one pass. Persisted in `localStorage`.
+CSS variables in `[data-theme="dark"]` / `[data-theme="light"]`. Theme switching is instant — updates CSS vars, Monaco theme, terminal ANSI colors, and native menu radio buttons in one pass. Persisted in `localStorage`.
 
 Colors derived from the MojaveWare brand:
 - **Dark**: deep blues (`#0d1a2a`, `#112240`) + sunset orange (`#E85324`) + sand text (`#F4E2CE`)
 - **Light**: warm sand (`#FEFAF7`, `#F4E2CE`) + deep blue text (`#1F4266`) + same accent orange
+
+**Theme Generator** (`Tema > Generate Theme...`): create custom themes from 3 input colors:
+- **Background** — ~10 variants derived automatically (darkest, panel, sidebar, hover, active, tabs, terminal, border) using lightness adjustments
+- **Accent** — syntax highlighting colors generated via hue rotation (+40 numbers, +100 strings, +130 tags, +160 functions, +220 variables). UI colors (red, green, blue, yellow, teal) also derived
+- **Text** — primary/secondary/muted derived by mixing with background at different ratios
+- Auto-detects dark vs light based on background luminance (ITU-R BT.601)
+- Generates a complete Monaco editor theme (11 token rules + 15 editor colors) and terminal theme (16 ANSI colors)
+- Live mini-preview updates as you pick colors
+- Custom themes are saved in `localStorage`, appear in the native Tema menu, and can be deleted from `Tema > Delete Theme`
 
 ---
 

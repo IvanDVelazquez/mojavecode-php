@@ -133,7 +133,7 @@ Electron-builder tecnicamente soporta algunos escenarios de compilacion cruzada,
 ### Editor
 
 - **Monaco Editor** — el mismo motor detras de VS Code, con resaltado de sintaxis para 30+ lenguajes
-- **Dos temas** — Mojave Dark (azules profundos + naranja atardecer) y Mojave Light (arena calida + azul profundo), intercambiables desde la barra de menu nativa de macOS
+- **Temas** — Mojave Dark y Mojave Light integrados, mas un **generador de temas** para crear temas custom ilimitados a partir de 3 colores (fondo, acento, texto). Los temas custom se persisten entre sesiones y aparecen en la barra de menu nativa
 - **Gestion de pestanas** — avisos de cambios sin guardar, indicadores de modificacion, **reordenamiento con drag & drop**, multiples pestanas especiales (terminal, git graph, diff, output, base de datos, rutas, logs)
 - **Vista Diff** — comparacion lado a lado para cambios staged y unstaged de git
 - **Zoom** (`Cmd+=` / `Cmd+-` / `Cmd+0`) — ajusta el tamano de fuente del editor de 8px a 40px con altura de linea proporcional. Indicador de porcentaje en la barra de estado (click para resetear). Persistido entre sesiones via localStorage
@@ -215,6 +215,17 @@ Accesible desde la barra de acciones del sidebar. Lee todos los archivos de log 
 - Arranca en el directorio raiz del proyecto y se reinicia al cambiar de proyecto
 - Soporte completo de colores, URLs clickeables, scroll suave
 - Se redimensiona automaticamente con el layout del editor
+- **Ciclo de vida limpio** — cerrar la pestana de terminal mata el proceso pty subyacente; al volver a abrirla siempre se crea una shell nueva con un entorno limpio
+
+### Integracion con Claude Code
+
+Panel en el sidebar (icono de bombilla en la barra de acciones) que lee el directorio `.claude/` del proyecto y muestra tus extensiones personalizadas de Claude Code:
+
+- **SKILLS** — muestra skills personalizadas de `.claude/skills/*/SKILL.md` y slash commands de `.claude/commands/*.md`. Cada entrada muestra su nombre y hasta 5 lineas de descripcion
+- **AGENTS** — muestra agentes personalizados de `.claude/agents/*.md` con su modelo e indicador de color
+- **Busqueda en el arbol de directorios** — encuentra automaticamente el directorio `.claude/` subiendo por el sistema de archivos desde la carpeta del proyecto actual, por lo que los sub-proyectos anidados se manejan correctamente
+- **Dashboard de detalle** — haz click en cualquier skill, comando o agente para abrir una pestana dedicada con el contenido Markdown renderizado completo, badges de tipo/modelo/version y una lista de chips con las herramientas declaradas
+- Campos de frontmatter parseados: `name`, `description`, `model`, `version`, `tools`, `color`
 
 ### Integracion con Git
 
@@ -229,7 +240,7 @@ Accesible desde la barra de acciones del sidebar. Lee todos los archivos de log 
 
 ### Interfaz y Navegacion
 
-- **Barra de acciones del sidebar** con acceso rapido a Busqueda, Terminal, Git, Base de Datos, Rutas y Logs
+- **Barra de acciones del sidebar** con acceso rapido a Busqueda, Terminal, Git, Base de Datos, Rutas, Logs e integracion con Claude Code
 - **Arbol de archivos** con carga lazy, iconos material, **auto-reveal** (activar una pestana expande y hace scroll hasta el archivo en el arbol, como el "Reveal in Side Bar" de VS Code) y **menu contextual con click derecho** (Copiar Ruta, Copiar, Pegar, Eliminar)
 - **Sidebar redimensionable** — arrastra el borde derecho para ajustar el ancho (150px–600px)
 - **Barra de breadcrumb** — muestra la ruta relativa del archivo activo entre la barra de pestanas y el editor, facilitando distinguir archivos con el mismo nombre en diferentes directorios
@@ -333,7 +344,7 @@ Puente seguro via `contextBridge.exposeInMainWorld`. Cada canal IPC esta explici
 
 ### Renderer (`renderer.js`)
 
-Aplicacion de pagina unica con estado mutable centralizado. Organizado en secciones numeradas que cubren inicializacion del editor, terminal (con auto-refresco de rama git), arbol de archivos (con menu contextual y auto-reveal), pestanas (con reordenamiento drag & drop), guardado (con auto-save), barra de breadcrumb, deteccion de lenguaje, toggles de UI (redimensionamiento del sidebar), panel de git, selector de ramas (paleta estilo command palette), cambio de tema, log de errores, apertura rapida, panel de busqueda, busqueda de simbolos, visor de base de datos, lista de rutas, visor de logs (formateado con busqueda y filtros), integracion Composer/Artisan (incluyendo Nuevo Proyecto Laravel), herramientas PHP y monitoreo del sistema.
+Aplicacion de pagina unica con estado mutable centralizado. Organizado en secciones numeradas que cubren inicializacion del editor, terminal (con auto-refresco de rama git y ciclo de vida limpio del pty), arbol de archivos (con menu contextual y auto-reveal), pestanas (con reordenamiento drag & drop), guardado (con auto-save), barra de breadcrumb, deteccion de lenguaje, toggles de UI (redimensionamiento del sidebar), panel de git, selector de ramas (paleta estilo command palette), cambio de tema y generador de temas custom (motor de derivacion de colores con preview en vivo), log de errores, apertura rapida, panel de busqueda, busqueda de simbolos, visor de base de datos, lista de rutas, visor de logs (formateado con busqueda y filtros), integracion Composer/Artisan (incluyendo Nuevo Proyecto Laravel), herramientas PHP, monitoreo del sistema y panel de integracion con Claude Code (skills, comandos, agentes con dashboard de detalle).
 
 ### Cliente LSP (`lsp-client.js`)
 
@@ -341,11 +352,20 @@ Conecta Monaco con Intelephense mediante providers para autocompletado, hover, d
 
 ### Temas
 
-Variables CSS en `[data-theme="dark"]` / `[data-theme="light"]`. El cambio de tema es instantaneo — actualiza variables CSS, tema de Monaco y radio buttons del menu nativo en un solo paso. Persistido en `localStorage`.
+Variables CSS en `[data-theme="dark"]` / `[data-theme="light"]`. El cambio de tema es instantaneo — actualiza variables CSS, tema de Monaco, colores ANSI de la terminal y radio buttons del menu nativo en un solo paso. Persistido en `localStorage`.
 
 Colores derivados de la marca MojaveWare:
 - **Dark**: azules profundos (`#0d1a2a`, `#112240`) + naranja atardecer (`#E85324`) + texto arena (`#F4E2CE`)
 - **Light**: arena calida (`#FEFAF7`, `#F4E2CE`) + texto azul profundo (`#1F4266`) + mismo naranja de acento
+
+**Generador de Temas** (`Tema > Generate Theme...`): crea temas personalizados a partir de 3 colores:
+- **Fondo** — ~10 variantes derivadas automaticamente (darkest, panel, sidebar, hover, active, tabs, terminal, border) usando ajustes de luminosidad
+- **Acento** — colores de sintaxis generados via rotacion de hue (+40 numeros, +100 strings, +130 tags, +160 funciones, +220 variables). Colores de UI (rojo, verde, azul, amarillo, teal) tambien derivados
+- **Texto** — primary/secondary/muted derivados mezclando con el fondo en diferentes proporciones
+- Detecta automaticamente dark vs light segun la luminosidad del fondo (ITU-R BT.601)
+- Genera un tema Monaco completo (11 reglas de token + 15 colores del editor) y tema de terminal (16 colores ANSI)
+- Mini-preview en vivo que se actualiza mientras eliges colores
+- Los temas custom se guardan en `localStorage`, aparecen en el menu nativo Tema y se pueden eliminar desde `Tema > Delete Theme`
 
 ---
 

@@ -1765,6 +1765,184 @@ body {
   color: var(--text-muted);
 }
 
+/* ─── THEME GENERATOR DIALOG ─── */
+/* Diálogo para crear temas custom a partir de 3 colores.
+   Incluye preview en miniatura que se actualiza en vivo. */
+#theme-gen-overlay {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.5);
+  z-index: 2000;
+  display: flex;
+  justify-content: center;
+  padding-top: 60px;
+}
+
+#theme-gen-dialog {
+  width: 420px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 16px 48px rgba(0,0,0,0.5);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  align-self: flex-start;
+}
+
+.theme-gen-header {
+  padding: 12px 16px;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border);
+}
+
+.theme-gen-body {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.theme-gen-field label {
+  display: block;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+
+.theme-gen-field input[type="text"] {
+  width: 100%;
+  padding: 8px 10px;
+  background: var(--bg-dark);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.theme-gen-field input[type="text"]:focus {
+  border-color: var(--accent);
+}
+
+.theme-gen-colors {
+  display: flex;
+  gap: 12px;
+}
+
+.theme-gen-colors .theme-gen-field {
+  flex: 1;
+}
+
+.theme-gen-color-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.theme-gen-color-row input[type="color"] {
+  width: 36px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  cursor: pointer;
+  background: none;
+  padding: 2px;
+}
+
+.theme-gen-color-row input[type="color"]::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.theme-gen-color-row input[type="color"]::-webkit-color-swatch {
+  border: none;
+  border-radius: 3px;
+}
+
+.theme-gen-hex {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* Mini preview del tema generado */
+#theme-gen-preview {
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  height: 110px;
+  display: flex;
+  flex-direction: column;
+}
+
+.theme-preview-bar {
+  height: 10px;
+  flex-shrink: 0;
+}
+
+.theme-preview-body {
+  flex: 1;
+  display: flex;
+}
+
+.theme-preview-sidebar {
+  width: 40px;
+  flex-shrink: 0;
+}
+
+.theme-preview-editor {
+  flex: 1;
+  padding: 6px 8px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+.theme-preview-statusbar {
+  height: 8px;
+  flex-shrink: 0;
+}
+
+.theme-gen-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+}
+
+.theme-gen-btn {
+  padding: 7px 16px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg-dark);
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.theme-gen-btn:hover { background: var(--bg-hover); }
+
+.theme-gen-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.theme-gen-btn.primary:hover { filter: brightness(1.1); }
+
 /* ─── BRANCH PICKER (Git checkout) ─── */
 /* Misma estructura visual que el Symbol Search y Command Prompt:
    overlay oscuro + caja con input + lista scrolleable.
@@ -2774,6 +2952,330 @@ body {
   word-break: break-all;
   background: var(--bg-dark);
   border-top: 1px solid var(--border);
+}
+
+/* ─── CLAUDE PANEL (sidebar) ─── */
+#claude-panel {
+  flex-direction: column;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.claude-empty {
+  padding: 16px 14px;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* Sección colapsable principal (SKILLS, AGENTS, PROJECT) */
+.claude-panel-section {
+  border-bottom: 1px solid var(--border);
+}
+
+.claude-panel-section-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.1s;
+}
+
+.claude-panel-section-header:hover { background: var(--bg-hover); }
+
+.claude-panel-chevron {
+  font-size: 10px;
+  width: 12px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.claude-panel-section-body {
+  padding-bottom: 6px;
+}
+
+/* Badge numérico junto al título de sección */
+.claude-badge {
+  background: var(--bg-active);
+  color: var(--text-muted);
+  border-radius: 8px;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  margin-left: auto;
+}
+
+/* Label de grupo dentro de una sección (source del plugin, tipo de memory) */
+.claude-group-label {
+  padding: 4px 14px 2px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--accent-blue);
+}
+
+
+/* Items genéricos (skills, agents, memory, settings) */
+.claude-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 14px;
+  cursor: default;
+  transition: background 0.1s;
+}
+
+.claude-item:hover { background: var(--bg-hover); }
+
+.claude-item-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.claude-item-name {
+  font-size: 12px;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+.claude-item-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 5;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Badge de model en agents (sonnet, opus, haiku) */
+.claude-model-badge {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  background: var(--bg-active);
+  color: var(--text-muted);
+  border-radius: 4px;
+  padding: 1px 5px;
+  text-transform: uppercase;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* Badge de versión en skills */
+.claude-version-badge {
+  font-size: 9px;
+  color: var(--text-muted);
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* Nombre de un slash command — teal para diferenciarlo de skills */
+.claude-item-command {
+  color: var(--accent-teal) !important;
+}
+
+/* Dot de color para agents */
+.claude-agent-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* Empty hint dentro de sección */
+.claude-empty-hint {
+  padding: 8px 14px;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* Item clickable — cursor pointer y highlight de acento al hover */
+.claude-item-clickable { cursor: pointer; }
+.claude-item-clickable:hover { background: var(--bg-hover); }
+.claude-item-clickable:hover .claude-item-name { color: var(--accent-hover); }
+
+/* Permisos en settings */
+.claude-allow { color: var(--accent-green) !important; }
+.claude-deny  { color: var(--accent-red)   !important; }
+
+/* ─── CLAUDE DETAIL DASHBOARD ─── */
+#claude-detail-container {
+  display: none;
+  flex: 1;
+  flex-direction: column;
+  overflow-y: auto;
+  background: var(--bg-panel);
+}
+
+.cd-root {
+  display: flex;
+  flex-direction: column;
+  max-width: 780px;
+  margin: 0 auto;
+  padding: 32px 32px 48px;
+  width: 100%;
+}
+
+/* Header */
+.cd-header {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cd-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.cd-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.cd-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  margin: 0;
+}
+
+.cd-type-badge {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+.cd-type-skill   { background: rgba(36, 125, 157, 0.2); color: var(--accent-blue); }
+.cd-type-agent   { background: rgba(63, 185, 80, 0.15); color: var(--accent-green); }
+.cd-type-command { background: rgba(45, 212, 191, 0.15); color: var(--accent-teal); }
+
+.cd-meta-badge {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  background: var(--bg-active);
+  color: var(--text-muted);
+  padding: 2px 8px;
+  border-radius: 4px;
+  text-transform: uppercase;
+}
+
+.cd-description {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+/* Tools chips */
+.cd-tools-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.cd-tool-chip {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  background: var(--bg-dark);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  padding: 2px 7px;
+  border-radius: 4px;
+}
+
+/* Divider */
+.cd-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 24px 0;
+}
+
+/* Body — markdown renderizado */
+.cd-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.cd-h1 { font-size: 17px; font-weight: 700; color: var(--text-primary); margin: 20px 0 6px; }
+.cd-h2 { font-size: 14px; font-weight: 700; color: var(--text-primary); margin: 16px 0 4px; letter-spacing: 0.02em; }
+.cd-h3 { font-size: 12px; font-weight: 700; color: var(--accent-blue); text-transform: uppercase; letter-spacing: 0.06em; margin: 14px 0 4px; }
+
+.cd-p {
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--text-secondary);
+  margin: 2px 0;
+}
+
+.cd-li {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  margin: 1px 0;
+}
+
+.cd-bullet {
+  color: var(--accent);
+  flex-shrink: 0;
+  font-size: 11px;
+  margin-top: 1px;
+}
+
+.cd-num {
+  color: var(--text-muted);
+  min-width: 18px;
+  font-family: var(--font-mono);
+}
+
+.cd-spacer { height: 6px; }
+
+.cd-code {
+  background: var(--bg-dark);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px 16px;
+  margin: 8px 0;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  white-space: pre;
+}
+
+.cd-inline-code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--bg-active);
+  color: var(--accent-teal);
+  padding: 1px 5px;
+  border-radius: 3px;
 }
 
 /* ─── CONST NAME HIGHLIGHTS ─── */
