@@ -169,6 +169,8 @@ contextBridge.exposeInMainWorld('api', {
 
   // ── Claude Panel ──
   claudeRead: (folder) => ipcRenderer.invoke('claude:read', folder),
+  // Devuelve los últimos 10 prompts del proyecto con sus respuestas
+  claudeHistory: (folder) => ipcRenderer.invoke('claude:history', folder),
 
   // ── Search ──
   searchInFiles: (rootDir, query, options) => ipcRenderer.invoke('search:inFiles', rootDir, query, options),

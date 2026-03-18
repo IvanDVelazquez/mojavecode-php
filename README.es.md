@@ -224,8 +224,10 @@ Panel en el sidebar (icono de bombilla en la barra de acciones) que lee el direc
 - **SKILLS** — muestra skills personalizadas de `.claude/skills/*/SKILL.md` y slash commands de `.claude/commands/*.md`. Cada entrada muestra su nombre y hasta 5 lineas de descripcion
 - **AGENTS** — muestra agentes personalizados de `.claude/agents/*.md` con su modelo e indicador de color
 - **Busqueda en el arbol de directorios** — encuentra automaticamente el directorio `.claude/` subiendo por el sistema de archivos desde la carpeta del proyecto actual, por lo que los sub-proyectos anidados se manejan correctamente
-- **Dashboard de detalle** — haz click en cualquier skill, comando o agente para abrir una pestana dedicada con el contenido Markdown renderizado completo, badges de tipo/modelo/version y una lista de chips con las herramientas declaradas
+- **HISTORY** — tercera seccion colapsable que muestra los ultimos 10 prompts humanos enviados a Claude Code en este proyecto. Cada entrada muestra un timestamp (hora si es de hoy, fecha corta si es de otro dia), hasta 4 lineas del prompt y un snippet de una linea de la respuesta de Claude
+- **Dashboard de detalle** — haz click en cualquier skill, comando, agente o prompt del historial para abrir una pestana dedicada. Skills y agentes muestran el Markdown completo con badges de tipo/modelo/version y chips de herramientas. Los prompts del historial muestran un bloque `YOU` con el prompt completo y un bloque `CLAUDE` con la respuesta renderizada en Markdown
 - Campos de frontmatter parseados: `name`, `description`, `model`, `version`, `tools`, `color`
+- El historial se lee de `~/.claude/projects/` — sin configuracion, Claude Code graba las conversaciones automaticamente. Funciona con cualquier ruta de proyecto incluyendo las que tienen puntos en los nombres de directorio (ej: `proyecto.2026`)
 
 ### Integracion con Git
 

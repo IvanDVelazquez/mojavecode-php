@@ -210,8 +210,10 @@ A sidebar panel (lightbulb icon in the action bar) that reads the project's `.cl
 - **SKILLS** — displays custom skills from `.claude/skills/*/SKILL.md` and slash commands from `.claude/commands/*.md`. Each entry shows its name and up to 5 lines of description
 - **AGENTS** — displays custom agents from `.claude/agents/*.md` with their model and color indicator
 - **Directory walk-up** — automatically finds the `.claude/` directory by climbing the filesystem from the current project folder, so nested sub-projects are handled correctly
-- **Detail dashboard** — click any skill, command, or agent to open a dedicated tab with the full rendered Markdown content, type/model/version badges, and a chip list of declared tools
+- **HISTORY** — third collapsible section showing the last 10 human prompts sent to Claude Code in this project. Each entry shows a timestamp (time if today, short date otherwise), up to 4 lines of the prompt, and a one-line snippet of Claude's response
+- **Detail dashboard** — click any skill, command, agent, or history prompt to open a dedicated tab. Skills and agents show full rendered Markdown with type/model/version badges and tool chips. History prompts show a `YOU` block with the full prompt and a `CLAUDE` block with the rendered Markdown response
 - Frontmatter fields parsed: `name`, `description`, `model`, `version`, `tools`, `color`
+- History is read from `~/.claude/projects/` — no configuration needed, Claude Code records conversations automatically. Works with any project path including those with dots in directory names (e.g. `project.2026`)
 
 ### Git Integration
 - **Source Control panel** — staged, unstaged, and untracked files with one-click stage/unstage/discard

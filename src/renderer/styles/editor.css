@@ -3278,6 +3278,117 @@ body {
   border-radius: 3px;
 }
 
+/* ════════════════════════════════════════════════════════════
+   HISTORY — items de historial dentro del panel Claude
+   ════════════════════════════════════════════════════════════ */
+
+/* Fila superior: timestamp a la derecha */
+.history-item-header {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 4px;
+}
+
+.history-item-ts {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+/* Texto del prompt (hasta 4 líneas, luego ellipsis) */
+.history-item-prompt {
+  font-size: 12px;
+  color: var(--text-primary);
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+  white-space: pre-wrap;
+  margin-bottom: 4px;
+}
+
+/* Snippet de la respuesta (1 línea, color apagado) */
+.history-item-response {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* ════════════════════════════════════════════════════════════
+   HISTORY DETAIL — vista completa del prompt + respuesta
+   ════════════════════════════════════════════════════════════ */
+
+/* Contenedor raíz del detalle (reutiliza cd-root de Claude) */
+#history-detail-container {
+  display: none;
+  flex: 1;
+  overflow: auto;
+}
+
+.hd-root {
+  max-width: 860px;
+  margin: 0 auto;
+}
+
+/* Bloque genérico (YOU / CLAUDE) */
+.hd-block {
+  padding: 20px 24px;
+}
+
+/* Fila con el badge de rol y el timestamp */
+.hd-role-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+/* Badge de rol */
+.hd-role-badge {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 2px 8px;
+  border-radius: 3px;
+  text-transform: uppercase;
+}
+
+.hd-role-user {
+  background: var(--accent-color);
+  color: var(--bg-darkest);
+}
+
+.hd-role-claude {
+  background: var(--accent-teal);
+  color: var(--bg-darkest);
+}
+
+/* Timestamp en el detalle */
+.hd-ts {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+/* Texto del prompt en el detalle — preservar saltos de línea */
+.hd-prompt-text {
+  font-family: var(--font-sans, inherit);
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+  background: none;
+  border: none;
+  padding: 0;
+}
+
 /* ─── CONST NAME HIGHLIGHTS ─── */
 [data-theme="dark"] .const-name-highlight { color: #F7A73E !important; font-weight: bold; }
 [data-theme="light"] .const-name-highlight { color: #c88520 !important; font-weight: bold; }

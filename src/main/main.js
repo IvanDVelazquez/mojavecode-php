@@ -577,7 +577,7 @@ function createMenu() {
             dialog.showMessageBox(mainWindow, {
               type: 'info',
               title: 'MojaveCode PHP',
-              message: 'MojaveCode PHP v2.3.0',
+              message: 'MojaveCode PHP v2.4.0',
               detail: 'A lightweight code editor by MojaveWare.\nBuilt with Electron + Monaco + xterm.js',
             });
           },
@@ -2048,6 +2048,259 @@ ipcMain.handle('claude:read', async (event, folder) => {
     }
 
     return result;
+  } catch (e) {
+    return { error: e.message };
+  }
+});
+
+// ────────────────────────────────────────────────────────────────
+// 16b. IPC HANDLERS — CLAUDE HISTORY
+//      Lee el historial de conversaciones del proyecto desde
+//      ~/.claude/projects/{encoded-path}/*.jsonl y devuelve
+//      los últimos 10 prompts humanos con su respuesta.
+// ────────────────────────────────────────────────────────────────
+
+/**
+ * Devuelve los últimos 10 prompts humanos del proyecto con su respuesta.
+ *
+ * CÓMO FUNCIONA:
+ * ──────────────
+ * Claude Code guarda cada sesión como un archivo JSONL en:
+ *   ~/.claude/projects/<encoded-path>/<session-uuid>.jsonl
+ *
+ * Donde <encoded-path> es la ruta del proyecto con '/' Y '.' reemplazados
+ * por '-' (incluyendo la barra inicial), por ejemplo:
+ *   /Users/ivan/projects/my.app  →  -Users-ivan-projects-my-app
+ *
+ * Cada línea del JSONL es un mensaje con estructura:
+ *   { type: 'user'|'assistant'|'system'|..., uuid, parentUuid, timestamp, message }
+ *
+ * Los mensajes 'user' con content de texto son los prompts humanos reales.
+ * Los mensajes 'user' con content de tipo 'tool_result' son respuestas
+ * automáticas a herramientas — se filtran.
+ *
+ * OBTENCIÓN DE LA RESPUESTA:
+ * ──────────────────────────
+ * La conversación forma un árbol de mensajes vinculados por parentUuid.
+ * Para encontrar la respuesta a un prompt, seguimos la cadena:
+ *   user (prompt) → assistant (thinking) → user (tool_result) → assistant (texto)
+ * Continuamos hasta encontrar el primer bloque 'text' no vacío en un
+ * mensaje assistant, ignorando los bloques 'thinking' de extended thinking.
+ *
+ * ENCODING DE RUTA:
+ * ─────────────────
+ * Claude Code usa match exacto de carpeta — no hay walk-up. Se resuelven
+ * symlinks y se normaliza el trailing slash para cubrir variaciones.
+ * El encoding reemplaza '/' Y '.' con '-' (descubierto empíricamente en
+ * proyectos con nombres como puntosflex.2026).
+ *
+ * @param {string} folder - Carpeta del proyecto (state.currentFolder del renderer)
+ * @returns {{ prompts: Array<{uuid, prompt, response, timestamp, sessionId}> }}
+ *          Array ordenado por timestamp desc, máximo 10 items.
+ *          En caso de error devuelve { error: string }.
+ */
+ipcMain.handle('claude:history', async (event, folder) => {
+  if (!folder) return { error: 'No folder open' };
+
+  try {
+    // ── Localizar la carpeta de historial del proyecto ─────────────────
+    //
+    // Claude Code guarda las sesiones en ~/.claude/projects/<encoded-path>/
+    // donde <encoded-path> es la ruta del proyecto con '/' → '-'.
+    //
+    // Ejemplo: /Users/ivan/projects/myapp → -Users-ivan-projects-myapp
+    //
+    // Usamos match exacto (sin walk-up) porque el historial de un
+    // directorio padre pertenece a OTRO proyecto.
+    //
+    // Se resuelven symlinks y se normaliza la ruta para cubrir
+    // variaciones como trailing slashes o links simbólicos.
+    const homeDir = os.homedir();
+    const projectsBase = path.join(homeDir, '.claude', 'projects');
+
+    // Claude Code codifica la ruta reemplazando tanto '/' como '.' por '-'.
+    // Ejemplo: /Users/ivan/sites/my.app → -Users-ivan-sites-my-app
+    function encodePath(p) {
+      return p.replace(/\/+$/, '').replace(/[/.]/g, '-');
+    }
+
+    // Intentar con la ruta tal cual y con la ruta resuelta (symlinks)
+    const candidates = [
+      folder.replace(/\/+$/, ''),  // sin trailing slash
+    ];
+    try {
+      const resolved = fs.realpathSync(folder).replace(/\/+$/, '');
+      if (resolved !== candidates[0]) candidates.push(resolved);
+    } catch (_) { /* no-op si realpathSync falla */ }
+
+    let claudeProjectsDir = null;
+    for (const candidate of candidates) {
+      const encoded = encodePath(candidate);
+      const dir = path.join(projectsBase, encoded);
+      if (fs.existsSync(dir)) {
+        const hasJsonl = fs.readdirSync(dir).some((f) => f.endsWith('.jsonl'));
+        if (hasJsonl) {
+          claudeProjectsDir = dir;
+          break;
+        }
+      }
+    }
+
+    if (!claudeProjectsDir) {
+      return { prompts: [] };
+    }
+
+    // ── Leer todos los archivos .jsonl de la sesión ──────────────────────
+    //
+    // Cada archivo .jsonl corresponde a una sesión de conversación.
+    // Leemos todos y fusionamos los mensajes en un pool único.
+    const jsonlFiles = fs.readdirSync(claudeProjectsDir)
+      .filter((f) => f.endsWith('.jsonl'))
+      .map((f) => path.join(claudeProjectsDir, f));
+
+    if (!jsonlFiles.length) return { prompts: [] };
+
+    // byUuid: mapa de todos los mensajes indexados por su uuid
+    // childrenMap: mapa de parentUuid → array de mensajes hijo
+    const byUuid      = {};
+    const childrenMap = {};
+
+    for (const file of jsonlFiles) {
+      let content;
+      try {
+        content = fs.readFileSync(file, 'utf8');
+      } catch (_) {
+        continue;
+      }
+
+      for (const line of content.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        let obj;
+        try { obj = JSON.parse(trimmed); } catch (_) { continue; }
+
+        const uid = obj.uuid;
+        if (!uid) continue;
+
+        byUuid[uid] = obj;
+
+        const parent = obj.parentUuid;
+        if (parent) {
+          if (!childrenMap[parent]) childrenMap[parent] = [];
+          childrenMap[parent].push(obj);
+        }
+      }
+    }
+
+    // ── Filtrar los prompts humanos reales ───────────────────────────────
+    //
+    // Criterios para que un mensaje 'user' sea un prompt humano:
+    //   1. type === 'user'
+    //   2. message.content es un string con texto, O es un array que contiene
+    //      al menos un bloque de type:'text' y NO contiene type:'tool_result'
+    //      (los tool_result son respuestas automáticas a herramientas, no del usuario)
+    const humanPrompts = [];
+
+    for (const obj of Object.values(byUuid)) {
+      if (obj.type !== 'user') continue;
+
+      const msg     = obj.message || {};
+      const content = msg.content;
+      let promptText = '';
+
+      if (typeof content === 'string') {
+        promptText = content.trim();
+      } else if (Array.isArray(content)) {
+        // Descartar si hay algún tool_result — son respuestas automáticas
+        const hasToolResult = content.some((c) => c && c.type === 'tool_result');
+        if (hasToolResult) continue;
+
+        // Extraer texto de los bloques type:'text'
+        for (const block of content) {
+          if (block && block.type === 'text' && block.text) {
+            promptText += block.text;
+          }
+        }
+        promptText = promptText.trim();
+      }
+
+      // Filtrar mensajes vacíos y mensajes de sistema embebidos
+      // (local-command-caveat, command-name, etc.)
+      if (!promptText) continue;
+      if (promptText.startsWith('<local-command-caveat>')) continue;
+      if (promptText.startsWith('<command-name>')) continue;
+      if (promptText.startsWith('<local-command-stdout>')) continue;
+      if (promptText.startsWith('This session is being continued')) continue;
+
+      humanPrompts.push({
+        uuid:      obj.uuid,
+        text:      promptText,
+        timestamp: obj.timestamp || '',
+        sessionId: obj.sessionId || '',
+      });
+    }
+
+    // ── Para cada prompt, obtener la primera respuesta de texto ──────────
+    //
+    // La cadena de mensajes en Claude Code es:
+    //   user (prompt) → assistant (puede ser solo thinking) →
+    //   user (tool_result) → assistant (más thinking o texto) → ...
+    //
+    // Para encontrar la respuesta real, seguimos la cadena saltando
+    // tanto por mensajes assistant (que pueden no tener texto) como
+    // por mensajes user/system intermedios (tool results, etc.).
+    //
+    // Se ignoran los bloques 'thinking' (extended thinking de Opus).
+    // Tomamos el primer bloque de texto encontrado.
+    function getAssistantResponse(promptUuid) {
+      let currentUuid = promptUuid;
+      const MAX_STEPS = 80;
+      let steps = 0;
+
+      while (steps < MAX_STEPS) {
+        const children = childrenMap[currentUuid] || [];
+        if (!children.length) break;
+
+        // Priorizar encontrar un assistant con texto
+        for (const child of children) {
+          if (child.type === 'assistant') {
+            const content = child.message?.content || [];
+            for (const block of content) {
+              if (block && block.type === 'text' && block.text?.trim()) {
+                return block.text.trim();
+              }
+            }
+          }
+        }
+
+        // No encontramos texto — avanzar al primer hijo para seguir la cadena.
+        // En la conversación lineal, el primer hijo es el siguiente mensaje
+        // (ya sea assistant sin texto, user con tool_result, o system).
+        currentUuid = children[0].uuid;
+        steps++;
+      }
+
+      return '';
+    }
+
+    // ── Ensamblar resultado: ordenar por timestamp desc, tomar 10 ────────
+    humanPrompts.sort((a, b) => (b.timestamp > a.timestamp ? 1 : -1));
+    const last10 = humanPrompts.slice(0, 10);
+
+    return {
+      prompts: last10.map((p) => {
+        let response = getAssistantResponse(p.uuid);
+        // Filtrar respuestas que son errores de API (no son útiles para el usuario)
+        if (response.startsWith('API Error:')) response = '';
+        return {
+          uuid:      p.uuid,
+          prompt:    p.text,
+          response,
+          timestamp: p.timestamp,
+          sessionId: p.sessionId,
+        };
+      }),
+    };
   } catch (e) {
     return { error: e.message };
   }

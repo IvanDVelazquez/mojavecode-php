@@ -973,7 +973,8 @@ const specialTabs = [
   { match: '__db-viewer__',       container: 'db-viewer-container',      display: 'flex',  label: 'Database' },
   { match: '__route-list__',      container: 'route-list-container',     display: 'flex',  label: 'Routes' },
   { match: '__log:',             container: 'log-viewer-container',     display: 'flex',  label: 'Log', prefix: true },
-  { match: '__claude-detail__', container: 'claude-detail-container',  display: 'flex',  label: 'Claude', prefix: true },
+  { match: '__claude-detail__',  container: 'claude-detail-container',  display: 'flex',  label: 'Claude',  prefix: true },
+  { match: '__history-detail__', container: 'history-detail-container', display: 'flex',  label: 'Prompt',  prefix: true },
 ];
 
 function activateTab(tab) {
@@ -5506,7 +5507,13 @@ async function renderClaudePanel() {
     return;
   }
 
-  const data = await window.api.claudeRead(state.currentFolder);
+  // Lanzar ambas peticiones IPC en paralelo:
+  // - claudeRead: skills, commands, agents del directorio .claude
+  // - claudeHistory: últimos 10 prompts humanos del proyecto
+  const [data, historyResult] = await Promise.all([
+    window.api.claudeRead(state.currentFolder),
+    window.api.claudeHistory(state.currentFolder),
+  ]);
 
   if (data.error) {
     panel.innerHTML = `<div class="db-error">${escapeHtml(data.error)}</div>`;
@@ -5528,10 +5535,28 @@ async function renderClaudePanel() {
 
   let html = '';
 
-  // ── helper: sección colapsable ──
-  function claudeSection(id, icon, label, count, bodyHtml) {
+  /**
+   * Genera el HTML de una sección colapsable del panel Claude.
+   *
+   * Cada sección tiene:
+   *   - Un header clickeable con chevron, icono SVG, label y badge numérico
+   *   - Un body con el contenido (bodyHtml) o un hint cuando está vacío
+   *
+   * El colapsado/expandido se gestiona en el event listener de más abajo
+   * (no inline en el HTML) para mantener el HTML limpio.
+   *
+   * @param {string} id        - Identificador único usado en data-claude-section y data-claude-body
+   * @param {string} icon      - SVG inline del icono del header
+   * @param {string} label     - Texto del header en mayúsculas (ej: 'SKILLS')
+   * @param {number} count     - Cantidad de items; si es 0 se muestra emptyHint en lugar de bodyHtml
+   * @param {string} bodyHtml  - HTML del contenido de la sección cuando count > 0
+   * @param {string} [emptyHint] - Texto a mostrar cuando count === 0 (opcional)
+   * @returns {string} HTML completo de la sección
+   */
+  function claudeSection(id, icon, label, count, bodyHtml, emptyHint) {
     const hasContent = count > 0;
     const badge = count > 0 ? `<span class="claude-badge">${count}</span>` : '';
+    const fallback = emptyHint || 'None configured in .claude/';
     return `<div class="claude-panel-section">
       <div class="claude-panel-section-header" data-claude-section="${id}">
         <span class="claude-panel-chevron">▾</span>
@@ -5540,7 +5565,7 @@ async function renderClaudePanel() {
         ${badge}
       </div>
       <div class="claude-panel-section-body" data-claude-body="${id}">
-        ${hasContent ? bodyHtml : '<div class="claude-empty-hint">None configured in .claude/</div>'}
+        ${hasContent ? bodyHtml : `<div class="claude-empty-hint">${fallback}</div>`}
       </div>
     </div>`;
   }
@@ -5593,8 +5618,85 @@ async function renderClaudePanel() {
     agentsHtml
   );
 
+  // ════════════════════════════════════════════
+  // HISTORY — últimos 10 prompts de Claude Code
+  // ════════════════════════════════════════════
+  //
+  // Los datos vienen de historyResult (respuesta del IPC claude:history).
+  // Si la petición falló, historyResult.error tendrá el mensaje de error.
+  // Si no hay historial para este proyecto, prompts será un array vacío.
+  const prompts = (historyResult && historyResult.prompts) || [];
+
+  // Si hubo un error en la petición IPC, loguearlo para facilitar el debug
+  // (visible en DevTools > Console del renderer)
+  if (historyResult && historyResult.error) {
+    console.error('[Claude History]', historyResult.error);
+  }
+
+  /**
+   * Formatea un timestamp ISO 8601 para mostrarlo en el panel lateral.
+   *
+   * La idea es mostrar info relevante sin desperdiciar espacio:
+   * - Si es de hoy: solo la hora (HH:MM), porque la fecha es obvia
+   * - Si es de otro día: fecha corta (ej: "Mar 17"), sin hora
+   *
+   * @param {string} isoString - Timestamp en formato ISO 8601
+   * @returns {string} Cadena formateada lista para insertar en HTML
+   */
+  function formatTs(isoString) {
+    if (!isoString) return '';
+    const d   = new Date(isoString);
+    const now = new Date();
+    const sameDay =
+      d.getFullYear() === now.getFullYear() &&
+      d.getMonth() === now.getMonth() &&
+      d.getDate() === now.getDate();
+    if (sameDay) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  }
+
+  // ── Construir los items del historial ────────────────────────────────
+  //
+  // Cada item muestra:
+  //   - Timestamp a la derecha (hora o fecha según antigüedad)
+  //   - Hasta 4 líneas del prompt (CSS clamp)
+  //   - 1 línea del snippet de respuesta en gris/itálica (opcional)
+  //
+  // El data-history-idx permite al click handler recuperar el item completo
+  // de panel._historyData sin re-fetchear al main process.
+  let historyHtml = '';
+  for (const [i, p] of prompts.entries()) {
+    const ts = formatTs(p.timestamp);
+    const promptPreview = escapeHtml(p.prompt.slice(0, 200));
+    const respPreview   = p.response
+      ? escapeHtml(p.response.slice(0, 120).replace(/\n+/g, ' '))
+      : '';
+    historyHtml += `<div class="claude-item history-item" data-history-idx="${i}">
+      <div class="history-item-header">
+        <span class="history-item-ts">${ts}</span>
+      </div>
+      <div class="history-item-prompt">${promptPreview}</div>
+      ${respPreview ? `<div class="history-item-response">${respPreview}</div>` : ''}
+    </div>`;
+  }
+
+  // Hint vacío personalizado: distingue "sin historial" de "error de API"
+  const historyEmptyHint = (historyResult && historyResult.error)
+    ? `Error: ${escapeHtml(historyResult.error)}`
+    : 'No conversations found for this project';
+
+  html += claudeSection(
+    'history',
+    '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
+    'HISTORY',
+    prompts.length,
+    historyHtml,
+    historyEmptyHint
+  );
+
   // Guardar data para que los click handlers puedan acceder al contenido completo
-  panel._claudeData = data;
+  panel._claudeData   = data;
+  panel._historyData  = prompts;
 
   panel.innerHTML = html;
 
@@ -5609,13 +5711,22 @@ async function renderClaudePanel() {
     });
   });
 
-  // ── Click en item → abrir dashboard de detalle ──
+  // ── Click en skill/agent → abrir dashboard de detalle ──
   panel.querySelectorAll('.claude-item[data-claude-type]').forEach((el) => {
     el.addEventListener('click', () => {
       const type = el.dataset.claudeType;
       const idx  = parseInt(el.dataset.claudeIdx, 10);
       const item = type === 'skill' ? data.skills[idx] : data.agents[idx];
       if (item) openClaudeDetail(item, type);
+    });
+  });
+
+  // ── Click en prompt del historial → abrir detalle ──
+  panel.querySelectorAll('.history-item[data-history-idx]').forEach((el) => {
+    el.addEventListener('click', () => {
+      const idx  = parseInt(el.dataset.historyIdx, 10);
+      const item = prompts[idx];
+      if (item) openHistoryDetail(item);
     });
   });
 }
@@ -5800,6 +5911,90 @@ function renderClaudeDetail(item, type) {
       </div>
       <div class="cd-divider"></div>
       <div class="cd-body">${renderClaudeMarkdown(item.body)}</div>
+    </div>
+  `;
+}
+
+// ══════════════════════════════════════════════════════════════
+// SECCIÓN 22 — HISTORIAL DE PROMPTS DE CLAUDE CODE
+//
+// Los últimos 10 prompts se muestran como tercera sección
+// colapsable dentro del panel Claude (al lado de SKILLS y AGENTS).
+// Al hacer click en un prompt, se abre un tab de detalle en el
+// editor con el prompt completo y la respuesta de Claude.
+//
+// Flujo:
+//   renderClaudePanel()  →  window.api.claudeHistory()  (IPC)
+//   click en prompt      →  openHistoryDetail(item)
+//   openHistoryDetail    →  activateTab() + renderHistoryDetail(item)
+// ══════════════════════════════════════════════════════════════
+
+/**
+ * Abre (o reactiva) el tab de detalle de un prompt.
+ *
+ * El path del tab es __history-detail__:<uuid> para que el registry
+ * de specialTabs lo reconozca y muestre history-detail-container.
+ *
+ * Si el tab ya existe, lo activa.  En ambos casos renderiza el detalle.
+ *
+ * @param {Object} item - Objeto con { uuid, prompt, response, timestamp }
+ */
+function openHistoryDetail(item) {
+  const tabPath = `__history-detail__:${item.uuid}`;
+  const existing = state.openTabs.find((t) => t.path === tabPath);
+  if (existing) {
+    activateTab(existing);
+  } else {
+    const label = item.prompt.split('\n')[0].slice(0, 40) || 'Prompt';
+    const tab = { path: tabPath, name: label, model: null, language: 'history', modified: false };
+    state.openTabs.push(tab);
+    activateTab(tab);
+  }
+  renderHistoryDetail(item);
+}
+
+/**
+ * Renderiza el detalle de un prompt en history-detail-container.
+ *
+ * LAYOUT:
+ *   ┌─ Header ─────────────────────────────────────────────┐
+ *   │  [USER]  timestamp                                    │
+ *   │  Texto completo del prompt                            │
+ *   ├──────────────────────────────────────────────────────┤
+ *   │  [CLAUDE]                                             │
+ *   │  Respuesta completa con Markdown renderizado          │
+ *   └──────────────────────────────────────────────────────┘
+ *
+ * @param {Object} item - Objeto con { uuid, prompt, response, timestamp }
+ */
+function renderHistoryDetail(item) {
+  const container = document.getElementById('history-detail-container');
+
+  // Formatear fecha completa para el detalle
+  const dateStr = item.timestamp
+    ? new Date(item.timestamp).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })
+    : '';
+
+  const responseHtml = item.response
+    ? renderClaudeMarkdown(item.response)
+    : '<p class="cd-p" style="opacity:0.5">No response recorded</p>';
+
+  container.innerHTML = `
+    <div class="cd-root hd-root">
+      <div class="hd-block hd-user">
+        <div class="hd-role-row">
+          <span class="hd-role-badge hd-role-user">YOU</span>
+          <span class="hd-ts">${escapeHtml(dateStr)}</span>
+        </div>
+        <pre class="hd-prompt-text">${escapeHtml(item.prompt)}</pre>
+      </div>
+      <div class="cd-divider"></div>
+      <div class="hd-block hd-assistant">
+        <div class="hd-role-row">
+          <span class="hd-role-badge hd-role-claude">CLAUDE</span>
+        </div>
+        <div class="cd-body">${responseHtml}</div>
+      </div>
     </div>
   `;
 }
