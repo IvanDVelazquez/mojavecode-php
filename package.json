@@ -38,11 +38,14 @@
       "node_modules/**/*"
     ],
     "mac": {
-      "target": "dmg",
-      "icon": "assets/icon.icns"
+    "target": "dmg",
+    "icon": "assets/icon.icns",
+    "identity": null
     },
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "signingHashAlgorithms": null,
+      "sign": null
     },
     "linux": {
       "target": "AppImage"
