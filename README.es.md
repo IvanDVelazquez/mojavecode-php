@@ -422,6 +422,10 @@ Sin dependencias adicionales de runtime para acceso a base de datos (usa CLI de 
 
 ## Changelog
 
+### v2.7.1
+
+- **Conflict Resolver de 3 paneles** — Rediseño del visor de conflictos de merge con tres paneles lado a lado (Yours | Result | Theirs) al estilo PhpStorm/IntelliJ. El panel central es editable para merge manual, los laterales son read-only. Scroll sincronizado entre los tres. Accept Left / Accept Right reemplaza el resultado completo, o editar manualmente y Apply & Resolve.
+
 ### v2.7.0
 
 - **Git Conflict Resolver** — Resolución visual de conflictos de merge. Al hacer click en un archivo en conflicto se abre un diff lado a lado (ours vs theirs) con resolución de un click: Accept Current, Accept Incoming, Accept Both, o Mark Resolved. Los conflictos aparecen en una sección dedicada "Merge Conflicts" al tope del panel Source Control.

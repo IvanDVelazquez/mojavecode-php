@@ -405,6 +405,10 @@ No additional runtime dependencies for database access (uses `mysql`/`psql` CLI)
 
 ## Changelog
 
+### v2.7.1
+
+- **3-Pane Conflict Resolver** — Redesigned merge conflict view with three side-by-side panels (Yours | Result | Theirs) like PhpStorm/IntelliJ. The center panel is editable for manual merging, lateral panels are read-only. Synchronized scroll across all three. Accept Left / Accept Right replaces the result entirely, or edit manually and Apply & Resolve.
+
 ### v2.7.0
 
 - **Git Conflict Resolver** — Visual merge conflict resolution. Clicking a conflicted file opens a side-by-side diff (ours vs theirs) with one-click resolution: Accept Current, Accept Incoming, Accept Both, or Mark Resolved. Conflicts appear in a dedicated "Merge Conflicts" section at the top of the Source Control panel.

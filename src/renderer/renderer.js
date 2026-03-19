@@ -1061,7 +1061,7 @@ const specialTabs = [
   { match: '__terminal__',        container: 'terminal-container',       display: 'block', label: 'Terminal',  onActivate: () => { if (state.terminalFitAddon) setTimeout(() => state.terminalFitAddon.fit(), 50); state.terminal?.focus(); } },
   { match: '__git-graph__',       container: 'git-graph-container',      display: 'block', label: 'Git Graph' },
   { match: '__diff__',            container: 'diff-container',           display: 'flex',  label: 'Diff',      prefix: true, onActivate: (tab) => { if (tab.diffEditor) { setTimeout(() => tab.diffEditor.layout(), 50); } else { closeTab(tab.path); } } },
-  { match: '__conflict__',        container: 'diff-container',           display: 'flex',  label: 'Conflict',  prefix: true, onActivate: (tab) => { if (tab.diffEditor) { setTimeout(() => tab.diffEditor.layout(), 50); } else { closeTab(tab.path); } } },
+  { match: '__conflict__',        container: 'diff-container',           display: 'flex',  label: 'Conflict',  prefix: true, onActivate: (tab) => { if (tab.conflictEditors) { setTimeout(() => tab.conflictEditors.forEach((e) => e.layout()), 50); } else { closeTab(tab.path); } } },
   { match: '__errorlog__',        container: 'errorlog-container',       display: 'flex',  label: 'Error Log' },
   { match: '__command-output__',  container: 'command-output-container', display: 'block', label: 'Output' },
   { match: '__db-viewer__',       container: 'db-viewer-container',      display: 'flex',  label: 'Database' },
@@ -3234,20 +3234,64 @@ async function gitPush() {
 }
 
 // ┌──────────────────────────────────────────────────┐
-// │  7e. GIT CONFLICT RESOLVER                       │
-// │  Vista visual de conflictos de merge. Muestra    │
-// │  ours vs theirs en diff editor con botones       │
-// │  Accept Current / Incoming / Both para resolver  │
-// │  cada archivo en conflicto sin editar markers.   │
+// │  7e. GIT CONFLICT RESOLVER (3-pane, PhpStorm)    │
+// │  Tres paneles: Yours (ours) | Result | Theirs.   │
+// │  El panel central es editable — el usuario       │
+// │  construye el merge final aceptando hunks de     │
+// │  cada lado o editando directamente. Al guardar   │
+// │  se escribe el resultado y se stagea el archivo. │
 // └──────────────────────────────────────────────────┘
 
 /**
- * Abre el conflict resolver para un archivo en conflicto.
+ * Genera el contenido inicial del panel Result a partir del archivo
+ * con marcadores de conflicto. Limpia los marcadores (<<<<<<<, =======,
+ * >>>>>>>) y conserva ambas versiones separadas por una línea vacía
+ * para que el usuario pueda editar el merge manualmente.
  *
- * Obtiene las versiones "ours" (stage 2) y "theirs" (stage 3) del
- * index de git, y las muestra en un Monaco DiffEditor con una barra
- * de herramientas para resolver: Accept Current, Accept Incoming,
- * Accept Both, o Mark as Resolved (para edición manual).
+ * @param {string} raw - Contenido del archivo con marcadores de conflicto
+ * @returns {string} Contenido limpio con ambas versiones visibles
+ */
+function buildInitialResult(raw) {
+  const lines = raw.split('\n');
+  const out = [];
+  let inConflict = false;
+  let section = null; // 'ours' o 'theirs'
+
+  for (const line of lines) {
+    if (line.startsWith('<<<<<<<')) {
+      inConflict = true;
+      section = 'ours';
+      out.push('// ── YOURS ──────────────────────────');
+      continue;
+    }
+    if (line.startsWith('=======') && inConflict) {
+      section = 'theirs';
+      out.push('// ── THEIRS ─────────────────────────');
+      continue;
+    }
+    if (line.startsWith('>>>>>>>') && inConflict) {
+      inConflict = false;
+      section = null;
+      out.push('// ── END CONFLICT ───────────────────');
+      continue;
+    }
+    out.push(line);
+  }
+  return out.join('\n');
+}
+
+/**
+ * Abre el conflict resolver de 3 paneles estilo PhpStorm.
+ *
+ * Layout:
+ *  ┌──────────────┬──────────────┬──────────────┐
+ *  │  Yours (L)   │  Result (C)  │  Theirs (R)  │
+ *  │  read-only   │  editable    │  read-only   │
+ *  └──────────────┴──────────────┴──────────────┘
+ *
+ * Toolbar superior con botones Accept Left / Accept Right (archivo
+ * completo) y "Apply & Resolve" que escribe el contenido del panel
+ * central al disco y lo stagea.
  *
  * @param {string} relativePath - Path relativo al repo
  * @param {string} absolutePath - Path absoluto en disco
@@ -3274,18 +3318,21 @@ async function openConflictView(relativePath, absolutePath, fileName) {
   const theirsContent = theirsResult.error ? '' : theirsResult.output;
   const currentContent = currentResult.error ? '' : currentResult.content;
 
+  // El panel central empieza con el contenido limpio (sin marcadores)
+  const resultContent = buildInitialResult(currentContent);
+
   const ext = fileName.split('.').pop();
   const language = getMonacoLanguage(ext);
+  const theme = document.documentElement.getAttribute('data-theme') === 'light'
+    ? 'mojavecode-php-light' : 'mojavecode-php-dark';
 
-  // Limpiar diff editor anterior si existe
-  const prevDiff = state.openTabs.find((t) => t.path.startsWith('__diff__') && t.diffEditor);
-  if (prevDiff) {
-    try { prevDiff.diffEditor.dispose(); } catch { /* ok */ }
-    if (prevDiff.diffModels) {
-      prevDiff.diffModels.forEach((m) => { try { m.dispose(); } catch { /* ok */ } });
-    }
-    prevDiff.diffEditor = null;
-    prevDiff.diffModels = null;
+  // Limpiar conflict editors anteriores
+  const prevConflict = state.openTabs.find((t) => t.path.startsWith('__conflict__') && t.conflictEditors);
+  if (prevConflict) {
+    prevConflict.conflictEditors.forEach((ed) => { try { ed.dispose(); } catch { /* ok */ } });
+    prevConflict.diffModels.forEach((m) => { try { m.dispose(); } catch { /* ok */ } });
+    prevConflict.conflictEditors = null;
+    prevConflict.diffModels = null;
   }
 
   const container = document.getElementById('diff-container');
@@ -3296,34 +3343,80 @@ async function openConflictView(relativePath, absolutePath, fileName) {
   toolbar.className = 'conflict-toolbar';
   toolbar.innerHTML = `
     <span class="conflict-toolbar-label">⚡ Merge Conflict — ${escapeHtml(fileName)}</span>
-    <button class="conflict-btn conflict-btn-ours" data-action="ours" title="Accept our version (current branch)">Accept Current</button>
-    <button class="conflict-btn conflict-btn-theirs" data-action="theirs" title="Accept incoming version (merging branch)">Accept Incoming</button>
-    <button class="conflict-btn conflict-btn-both" data-action="both" title="Keep both versions concatenated">Accept Both</button>
-    <button class="conflict-btn conflict-btn-resolve" data-action="resolve" title="Mark file as resolved (stage it as-is)">Mark Resolved</button>
+    <button class="conflict-btn conflict-btn-ours" data-action="accept-left" title="Replace result with Yours (current branch)">Accept Left</button>
+    <button class="conflict-btn conflict-btn-theirs" data-action="accept-right" title="Replace result with Theirs (incoming branch)">Accept Right</button>
+    <button class="conflict-btn conflict-btn-resolve" data-action="resolve" title="Save result and mark as resolved">Apply &amp; Resolve</button>
   `;
   container.appendChild(toolbar);
 
-  // ── Diff Editor: ours (izquierda) vs theirs (derecha) ──────
-  const diffWrap = document.createElement('div');
-  diffWrap.style.cssText = 'flex:1;min-height:0;';
-  container.appendChild(diffWrap);
+  // ── Cabeceras de los 3 paneles ─────────────────────────────
+  const headers = document.createElement('div');
+  headers.className = 'conflict-headers';
+  headers.innerHTML = `
+    <span class="conflict-header conflict-header-ours">Yours (Current Branch)</span>
+    <span class="conflict-header conflict-header-result">Result</span>
+    <span class="conflict-header conflict-header-theirs">Theirs (Incoming)</span>
+  `;
+  container.appendChild(headers);
 
-  const diffEditor = monaco.editor.createDiffEditor(diffWrap, {
-    theme: document.documentElement.getAttribute('data-theme') === 'light'
-      ? 'mojavecode-php-light' : 'mojavecode-php-dark',
-    readOnly: true,
+  // ── 3 paneles de editor ────────────────────────────────────
+  const panes = document.createElement('div');
+  panes.className = 'conflict-panes';
+  container.appendChild(panes);
+
+  const editorOpts = {
+    theme,
     automaticLayout: true,
-    renderSideBySide: true,
     fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
-    fontSize: 14,
-    lineHeight: 22,
+    fontSize: 13,
+    lineHeight: 20,
     minimap: { enabled: false },
     scrollBeyondLastLine: false,
-  });
+    lineNumbers: 'on',
+    glyphMargin: false,
+    folding: false,
+    renderLineHighlight: 'none',
+  };
 
-  const originalModel = monaco.editor.createModel(oursContent, language);
-  const modifiedModel = monaco.editor.createModel(theirsContent, language);
-  diffEditor.setModel({ original: originalModel, modified: modifiedModel });
+  // Panel izquierdo — Yours (read-only)
+  const leftPane = document.createElement('div');
+  leftPane.className = 'conflict-pane conflict-pane-left';
+  panes.appendChild(leftPane);
+
+  const oursModel = monaco.editor.createModel(oursContent, language);
+  const oursEditor = monaco.editor.create(leftPane, { ...editorOpts, readOnly: true, domReadOnly: true });
+  oursEditor.setModel(oursModel);
+
+  // Panel central — Result (editable)
+  const centerPane = document.createElement('div');
+  centerPane.className = 'conflict-pane conflict-pane-center';
+  panes.appendChild(centerPane);
+
+  const resultModel = monaco.editor.createModel(resultContent, language);
+  const resultEditor = monaco.editor.create(centerPane, { ...editorOpts, readOnly: false });
+  resultEditor.setModel(resultModel);
+
+  // Panel derecho — Theirs (read-only)
+  const rightPane = document.createElement('div');
+  rightPane.className = 'conflict-pane conflict-pane-right';
+  panes.appendChild(rightPane);
+
+  const theirsModel = monaco.editor.createModel(theirsContent, language);
+  const theirsEditor = monaco.editor.create(rightPane, { ...editorOpts, readOnly: true, domReadOnly: true });
+  theirsEditor.setModel(theirsModel);
+
+  // ── Sincronizar scroll entre los 3 paneles ─────────────────
+  let scrolling = false;
+  function syncScroll(source, targets) {
+    if (scrolling) return;
+    scrolling = true;
+    const top = source.getScrollTop();
+    targets.forEach((t) => t.setScrollTop(top));
+    scrolling = false;
+  }
+  oursEditor.onDidScrollChange(() => syncScroll(oursEditor, [resultEditor, theirsEditor]));
+  resultEditor.onDidScrollChange(() => syncScroll(resultEditor, [oursEditor, theirsEditor]));
+  theirsEditor.onDidScrollChange(() => syncScroll(theirsEditor, [oursEditor, resultEditor]));
 
   // ── Event handlers para los botones ────────────────────────
   toolbar.addEventListener('click', async (e) => {
@@ -3331,35 +3424,32 @@ async function openConflictView(relativePath, absolutePath, fileName) {
     if (!btn) return;
 
     const action = btn.dataset.action;
-    let resolvedContent;
 
-    if (action === 'ours') {
-      resolvedContent = oursContent;
-    } else if (action === 'theirs') {
-      resolvedContent = theirsContent;
-    } else if (action === 'both') {
-      resolvedContent = oursContent + '\n' + theirsContent;
-    } else if (action === 'resolve') {
-      // Usar el contenido actual del disco (el usuario puede haberlo editado manualmente)
-      const fresh = await window.api.readFile(absolutePath);
-      resolvedContent = fresh.error ? currentContent : fresh.content;
+    if (action === 'accept-left') {
+      resultModel.setValue(oursContent);
+      return;
     }
-
-    // Escribir y stagear el archivo resuelto
-    btn.textContent = 'Resolving...';
-    btn.disabled = true;
-    const result = await window.api.gitConflictResolve(state.currentFolder, relativePath, resolvedContent);
-
-    if (result.error) {
-      alert(`Failed to resolve conflict:\n${result.error}`);
-      btn.textContent = btn.dataset.action === 'resolve' ? 'Mark Resolved' : btn.textContent;
-      btn.disabled = false;
+    if (action === 'accept-right') {
+      resultModel.setValue(theirsContent);
       return;
     }
 
-    // Cerrar el tab de conflicto y refrescar el status
-    closeTab(conflictId);
-    refreshGitStatus();
+    if (action === 'resolve') {
+      const finalContent = resultModel.getValue();
+      btn.textContent = 'Resolving...';
+      btn.disabled = true;
+
+      const result = await window.api.gitConflictResolve(state.currentFolder, relativePath, finalContent);
+      if (result.error) {
+        alert(`Failed to resolve conflict:\n${result.error}`);
+        btn.innerHTML = 'Apply &amp; Resolve';
+        btn.disabled = false;
+        return;
+      }
+
+      closeTab(conflictId);
+      refreshGitStatus();
+    }
   });
 
   // ── Crear el tab ───────────────────────────────────────────
@@ -3369,8 +3459,8 @@ async function openConflictView(relativePath, absolutePath, fileName) {
     model: null,
     language,
     modified: false,
-    diffEditor,
-    diffModels: [originalModel, modifiedModel],
+    conflictEditors: [oursEditor, resultEditor, theirsEditor],
+    diffModels: [oursModel, resultModel, theirsModel],
   };
 
   state.openTabs.push(tab);

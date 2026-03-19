@@ -2414,11 +2414,11 @@ body {
   flex-shrink: 0;
 }
 
-/* ─── CONFLICT TOOLBAR ─── */
-/* Barra de herramientas que aparece sobre el diff editor cuando se
-   abre un archivo en conflicto. Muestra botones para resolver el
-   conflicto: Accept Current (ours), Accept Incoming (theirs),
-   Accept Both, o Mark Resolved (para edición manual). */
+/* ─── CONFLICT RESOLVER (3-pane, PhpStorm-style) ─── */
+/* Tres paneles horizontales: Yours | Result | Theirs.
+   El panel central es editable, los laterales read-only.
+   Toolbar superior con Accept Left / Accept Right / Apply & Resolve. */
+
 .conflict-toolbar {
   display: flex;
   align-items: center;
@@ -2454,8 +2454,49 @@ body {
 
 .conflict-btn-ours    { background: var(--accent-teal); }
 .conflict-btn-theirs  { background: var(--accent-blue); }
-.conflict-btn-both    { background: var(--accent-yellow); color: #1a1a2e; }
 .conflict-btn-resolve { background: var(--accent-green); }
+
+/* ── Panel headers (Yours / Result / Theirs) ── */
+.conflict-headers {
+  display: flex;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.conflict-header {
+  flex: 1;
+  padding: 4px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  text-align: center;
+}
+
+.conflict-header-ours   { color: var(--accent-teal); background: var(--bg-darkest); }
+.conflict-header-result  { color: var(--accent-green); background: var(--bg-dark); border-left: 1px solid var(--border); border-right: 1px solid var(--border); }
+.conflict-header-theirs  { color: var(--accent-blue); background: var(--bg-darkest); }
+
+/* ── 3-pane layout ── */
+.conflict-panes {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.conflict-pane {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.conflict-pane-center {
+  border-left: 2px solid var(--accent-green);
+  border-right: 2px solid var(--accent-green);
+}
+
+.conflict-pane-left  { border-right: 1px solid var(--border); }
+.conflict-pane-right { border-left: 1px solid var(--border); }
 
 /* ─── STASH PICKER ─── */
 /* Overlay y panel para gestionar stashes. Sigue el mismo patrón
