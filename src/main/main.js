@@ -606,7 +606,7 @@ function createMenu() {
             dialog.showMessageBox(mainWindow, {
               type: 'info',
               title: 'MojaveCode PHP',
-              message: 'MojaveCode PHP v2.7.1',
+              message: 'MojaveCode PHP v2.7.2',
               detail: 'A lightweight code editor by MojaveWare.\nBuilt with Electron + Monaco + xterm.js',
             });
           },

@@ -405,6 +405,13 @@ No additional runtime dependencies for database access (uses `mysql`/`psql` CLI)
 
 ## Changelog
 
+### v2.7.2
+
+- **Visual .env Editor** — Opening a `.env` file renders a form-style panel with variables grouped by prefix (APP, DB, MAIL, CACHE, etc.). Inline editing saves changes directly to the file. APP group always first, OTHER always last.
+- **.env Search** — Real-time filter across variable names and values. Groups with no matches auto-hide; matching groups auto-expand.
+- **.env Collapse All** — Toggle button to collapse or expand all groups at once.
+- **.env Split View** — "Open as Text" button opens the raw `.env` in the right pane (split editor) so you can see both views simultaneously.
+
 ### v2.7.1
 
 - **3-Pane Conflict Resolver** — Redesigned merge conflict view with three side-by-side panels (Yours | Result | Theirs) like PhpStorm/IntelliJ. The center panel is editable for manual merging, lateral panels are read-only. Synchronized scroll across all three. Accept Left / Accept Right replaces the result entirely, or edit manually and Apply & Resolve.

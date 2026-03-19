@@ -422,6 +422,13 @@ Sin dependencias adicionales de runtime para acceso a base de datos (usa CLI de 
 
 ## Changelog
 
+### v2.7.2
+
+- **Editor visual de .env** — Abrir un archivo `.env` muestra un panel tipo formulario con variables agrupadas por prefijo (APP, DB, MAIL, CACHE, etc.). La edición inline guarda los cambios directo al archivo. Grupo APP siempre primero, OTHER siempre al final.
+- **Búsqueda en .env** — Filtro en tiempo real por nombre o valor de variable. Los grupos sin resultados se ocultan; los que tienen coincidencias se expanden automáticamente.
+- **Colapsar todo en .env** — Botón toggle para colapsar o expandir todos los grupos de una vez.
+- **Vista split de .env** — El botón "Open as Text" abre el `.env` raw en el panel derecho (split editor) para ver ambas vistas simultáneamente.
+
 ### v2.7.1
 
 - **Conflict Resolver de 3 paneles** — Rediseño del visor de conflictos de merge con tres paneles lado a lado (Yours | Result | Theirs) al estilo PhpStorm/IntelliJ. El panel central es editable para merge manual, los laterales son read-only. Scroll sincronizado entre los tres. Accept Left / Accept Right reemplaza el resultado completo, o editar manualmente y Apply & Resolve.

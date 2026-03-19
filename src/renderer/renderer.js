@@ -982,6 +982,13 @@ async function openFile(filePath, fileName) {
     return;
   }
 
+  // ── .env → abrir como panel visual en vez de Monaco ────────
+  const baseName = (fileName || filePath.split(/[/\\]/).pop());
+  if (/^\.env(\.\w+)?$/.test(baseName)) {
+    openEnvViewer(filePath, baseName);
+    return;
+  }
+
   // Leer el archivo del disco via IPC
   const result = await window.api.readFile(filePath);
   if (result.error) {
@@ -1069,6 +1076,7 @@ const specialTabs = [
   { match: '__log:',             container: 'log-viewer-container',     display: 'flex',  label: 'Log', prefix: true },
   { match: '__claude-detail__',  container: 'claude-detail-container',  display: 'flex',  label: 'Claude',  prefix: true },
   { match: '__history-detail__', container: 'history-detail-container', display: 'flex',  label: 'Prompt',  prefix: true },
+  { match: '__env-viewer__',    container: 'env-viewer-container',     display: 'flex',  label: '.env',    prefix: true },
 ];
 
 function activateTab(tab) {
@@ -3605,6 +3613,279 @@ async function stashSave() {
 
   await renderStashList();
   refreshGitStatus();
+}
+
+// ┌──────────────────────────────────────────────────┐
+// │  7g. ENV VIEWER                                  │
+// │  Editor visual de archivos .env. Agrupa las      │
+// │  variables por prefijo (APP_, DB_, MAIL_, etc.)  │
+// │  y permite edición inline. Los cambios se        │
+// │  guardan directo al archivo .env original.       │
+// └──────────────────────────────────────────────────┘
+
+/**
+ * Parsea el contenido de un archivo .env en un array de entries.
+ *
+ * Preserva comentarios y líneas vacías como entries de tipo 'comment'
+ * o 'blank' para poder reconstruir el archivo sin perder formato.
+ * Las variables se parsean en entries de tipo 'var' con key y value.
+ *
+ * @param {string} raw - Contenido del archivo .env
+ * @returns {Array<{type: string, key?: string, value?: string, raw: string}>}
+ */
+function parseEnvContent(raw) {
+  const entries = [];
+  const lines = raw.split('\n');
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      entries.push({ type: 'blank', raw: line });
+    } else if (trimmed.startsWith('#')) {
+      entries.push({ type: 'comment', raw: line });
+    } else {
+      const eqIdx = trimmed.indexOf('=');
+      if (eqIdx === -1) {
+        entries.push({ type: 'comment', raw: line });
+      } else {
+        const key = trimmed.substring(0, eqIdx).trim();
+        let value = trimmed.substring(eqIdx + 1).trim();
+        // Quitar comillas envolventes
+        if ((value.startsWith('"') && value.endsWith('"')) ||
+            (value.startsWith("'") && value.endsWith("'"))) {
+          value = value.slice(1, -1);
+        }
+        entries.push({ type: 'var', key, value, raw: line });
+      }
+    }
+  }
+  return entries;
+}
+
+/**
+ * Reconstruye el contenido .env a partir de las entries modificadas.
+ *
+ * Preserva comentarios, líneas vacías y el orden original.
+ * Solo las variables editadas se actualizan; el resto queda igual.
+ *
+ * @param {Array} entries - Array de entries parseadas
+ * @returns {string} Contenido del .env para escribir al disco
+ */
+function serializeEnvContent(entries) {
+  return entries.map((e) => {
+    if (e.type !== 'var') return e.raw;
+    // Valor con espacios o caracteres especiales → envolver en comillas
+    const needsQuotes = /[\s#"'\\]/.test(e.value) || e.value === '';
+    const val = needsQuotes ? `"${e.value}"` : e.value;
+    return `${e.key}=${val}`;
+  }).join('\n');
+}
+
+/**
+ * Determina el grupo (sección) de una variable .env por su prefijo.
+ *
+ * Agrupa por prefijos comunes de Laravel: APP, DB, MAIL, CACHE,
+ * REDIS, AWS, LOG, BROADCAST, QUEUE, SESSION, etc.
+ * Variables sin prefijo conocido van al grupo "Other".
+ *
+ * @param {string} key - Nombre de la variable
+ * @returns {string} Nombre del grupo
+ */
+function envGroupName(key) {
+  const prefixes = [
+    'APP', 'DB', 'MAIL', 'SMTP', 'CACHE', 'REDIS', 'AWS', 'S3',
+    'LOG', 'BROADCAST', 'QUEUE', 'SESSION', 'FILESYSTEM',
+    'PUSHER', 'VITE', 'MIX', 'SANCTUM', 'TELESCOPE', 'HORIZON',
+    'SCOUT', 'CASHIER', 'STRIPE', 'PADDLE',
+  ];
+  for (const p of prefixes) {
+    if (key.startsWith(p + '_') || key === p) return p;
+  }
+  return 'OTHER';
+}
+
+/**
+ * Abre el visor visual de un archivo .env.
+ *
+ * Lee el contenido del archivo, lo parsea en entries agrupadas por
+ * prefijo, y renderiza un panel tipo formulario con edición inline.
+ * Los cambios se guardan directo al archivo .env al presionar Enter
+ * o al salir del campo de edición (blur).
+ *
+ * @param {string} filePath - Path absoluto del archivo .env
+ * @param {string} fileName - Nombre del archivo (.env, .env.local, etc.)
+ */
+async function openEnvViewer(filePath, fileName) {
+  const envId = `__env-viewer__${filePath}`;
+
+  // Si ya está abierto, activar
+  const existing = state.openTabs.find((t) => t.path === envId);
+  if (existing) {
+    activateTab(existing);
+    return;
+  }
+
+  const result = await window.api.readFile(filePath);
+  if (result.error) {
+    console.error('Error reading .env:', result.error);
+    return;
+  }
+
+  const entries = parseEnvContent(result.content);
+  const container = document.getElementById('env-viewer-container');
+
+  // ── Renderizar UI ──────────────────────────────────────────
+  renderEnvViewer(container, entries, filePath, fileName);
+
+  const tab = {
+    path: envId,
+    name: fileName,
+    model: null,
+    language: 'plaintext',
+    modified: false,
+    envFilePath: filePath,
+    envEntries: entries,
+  };
+
+  state.openTabs.push(tab);
+  activateTab(tab);
+}
+
+/**
+ * Renderiza el panel visual del .env con secciones colapsables.
+ *
+ * Cada variable se muestra como una fila KEY | VALUE con el valor
+ * editable inline. Los cambios se persisten inmediatamente al .env.
+ */
+function renderEnvViewer(container, entries, filePath, fileName) {
+  // Agrupar variables por prefijo, con APP primero y OTHER al final
+  const groupMap = new Map();
+  const varEntries = entries.filter((e) => e.type === 'var');
+  for (const entry of varEntries) {
+    const group = envGroupName(entry.key);
+    if (!groupMap.has(group)) groupMap.set(group, []);
+    groupMap.get(group).push(entry);
+  }
+  const groups = new Map();
+  if (groupMap.has('APP')) { groups.set('APP', groupMap.get('APP')); groupMap.delete('APP'); }
+  const other = groupMap.get('OTHER'); groupMap.delete('OTHER');
+  for (const [k, v] of groupMap) groups.set(k, v);
+  if (other) groups.set('OTHER', other);
+
+  let html = `
+    <div class="env-viewer-header">
+      <span class="env-viewer-title">${escapeHtml(fileName)}</span>
+      <span class="env-viewer-count" id="env-var-count">${varEntries.length} variables</span>
+      <div class="env-search-wrap">
+        <input class="env-search-input" id="env-search-input" type="text" placeholder="Filter variables..." autocomplete="off" spellcheck="false" />
+      </div>
+      <button class="env-viewer-collapse-btn" id="env-collapse-all" title="Collapse / Expand all groups">▾</button>
+      <button class="env-viewer-raw-btn" id="env-open-raw" title="Open as plain text in editor">Open as Text</button>
+    </div>
+    <div class="env-viewer-body">
+  `;
+
+  for (const [groupName, vars] of groups) {
+    html += `
+      <div class="env-group">
+        <div class="env-group-header" data-group="${escapeAttr(groupName)}">
+          <span class="env-group-chevron">▾</span>
+          <span class="env-group-name">${escapeHtml(groupName)}</span>
+          <span class="env-group-count">${vars.length}</span>
+        </div>
+        <div class="env-group-rows">
+    `;
+    for (const v of vars) {
+      html += `
+          <div class="env-row">
+            <span class="env-key" title="${escapeAttr(v.key)}">${escapeHtml(v.key)}</span>
+            <input class="env-value" type="text" value="${escapeAttr(v.value)}" data-key="${escapeAttr(v.key)}" spellcheck="false" autocomplete="off" />
+          </div>
+      `;
+    }
+    html += `
+        </div>
+      </div>
+    `;
+  }
+
+  html += '</div>';
+  container.innerHTML = html;
+
+  // ── "Open as Text" → abrir raw en el pane derecho (split) ──
+  container.querySelector('#env-open-raw').addEventListener('click', () => {
+    if (!state.split) enableSplit();
+    // Pequeño delay para que el pane derecho se inicialice
+    setTimeout(() => openFileInRightPane(filePath, fileName), 100);
+  });
+
+  // ── Collapse/expand de secciones ───────────────────────────
+  container.querySelectorAll('.env-group-header').forEach((header) => {
+    header.addEventListener('click', () => {
+      const chevron = header.querySelector('.env-group-chevron');
+      const rows = header.nextElementSibling;
+      chevron.classList.toggle('collapsed');
+      rows.classList.toggle('collapsed');
+    });
+  });
+
+  // ── Collapse / Expand all ────────────────────────────────────
+  const collapseBtn = container.querySelector('#env-collapse-all');
+  let allCollapsed = false;
+  collapseBtn.addEventListener('click', () => {
+    allCollapsed = !allCollapsed;
+    collapseBtn.textContent = allCollapsed ? '▸' : '▾';
+    container.querySelectorAll('.env-group-chevron').forEach((c) => c.classList.toggle('collapsed', allCollapsed));
+    container.querySelectorAll('.env-group-rows').forEach((r) => r.classList.toggle('collapsed', allCollapsed));
+  });
+
+  // ── Búsqueda: filtrar variables por key o value ─────────────
+  const searchInput = container.querySelector('#env-search-input');
+  searchInput.addEventListener('input', () => {
+    const query = searchInput.value.toLowerCase();
+    let visible = 0;
+    container.querySelectorAll('.env-row').forEach((row) => {
+      const key = row.querySelector('.env-key').textContent.toLowerCase();
+      const val = row.querySelector('.env-value').value.toLowerCase();
+      const match = !query || key.includes(query) || val.includes(query);
+      row.style.display = match ? '' : 'none';
+      if (match) visible++;
+    });
+    // Ocultar grupos que quedaron vacíos
+    container.querySelectorAll('.env-group').forEach((group) => {
+      const rows = group.querySelectorAll('.env-row');
+      const hasVisible = Array.from(rows).some((r) => r.style.display !== 'none');
+      group.style.display = hasVisible ? '' : 'none';
+      // Expandir grupos al buscar para que se vean los resultados
+      if (query && hasVisible) {
+        group.querySelector('.env-group-chevron')?.classList.remove('collapsed');
+        group.querySelector('.env-group-rows')?.classList.remove('collapsed');
+      }
+    });
+    // Actualizar contador
+    const countEl = container.querySelector('#env-var-count');
+    if (countEl) countEl.textContent = query ? `${visible} / ${varEntries.length}` : `${varEntries.length} variables`;
+  });
+
+  // ── Edición inline: guardar al salir del campo o Enter ─────
+  container.querySelectorAll('.env-value').forEach((input) => {
+    const save = async () => {
+      const key = input.dataset.key;
+      const newValue = input.value;
+      const entry = entries.find((e) => e.type === 'var' && e.key === key);
+      if (!entry || entry.value === newValue) return;
+      entry.value = newValue;
+      const content = serializeEnvContent(entries);
+      await window.api.writeFile(filePath, content);
+    };
+
+    input.addEventListener('blur', save);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        input.blur();
+      }
+    });
+  });
 }
 
 function initGitPanel() {
