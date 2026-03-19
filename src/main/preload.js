@@ -134,6 +134,18 @@ contextBridge.exposeInMainWorld('api', {
   gitListBranches: (cwd) => ipcRenderer.invoke('git:listBranches', cwd),
   gitCheckout: (cwd, branch) => ipcRenderer.invoke('git:checkout', cwd, branch),
 
+  // ── Git Conflict Resolution ──
+  gitConflictContent: (cwd, filePath, side) => ipcRenderer.invoke('git:conflictContent', cwd, filePath, side),
+  gitConflictResolve: (cwd, filePath, content) => ipcRenderer.invoke('git:conflictResolve', cwd, filePath, content),
+
+  // ── Git Stash ──
+  gitStashList: (cwd) => ipcRenderer.invoke('git:stashList', cwd),
+  gitStashSave: (cwd, message, includeUntracked) => ipcRenderer.invoke('git:stashSave', cwd, message, includeUntracked),
+  gitStashApply: (cwd, ref) => ipcRenderer.invoke('git:stashApply', cwd, ref),
+  gitStashPop: (cwd, ref) => ipcRenderer.invoke('git:stashPop', cwd, ref),
+  gitStashDrop: (cwd, ref) => ipcRenderer.invoke('git:stashDrop', cwd, ref),
+  gitStashShow: (cwd, ref) => ipcRenderer.invoke('git:stashShow', cwd, ref),
+
   // ── LSP (Language Server Protocol) ──
   lspStart: (workspaceFolder) => ipcRenderer.invoke('lsp:start', workspaceFolder),
   lspStop: () => ipcRenderer.invoke('lsp:stop'),

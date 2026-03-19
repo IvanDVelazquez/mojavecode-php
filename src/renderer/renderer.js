@@ -1060,7 +1060,8 @@ class ${className}
 const specialTabs = [
   { match: '__terminal__',        container: 'terminal-container',       display: 'block', label: 'Terminal',  onActivate: () => { if (state.terminalFitAddon) setTimeout(() => state.terminalFitAddon.fit(), 50); state.terminal?.focus(); } },
   { match: '__git-graph__',       container: 'git-graph-container',      display: 'block', label: 'Git Graph' },
-  { match: '__diff__',            container: 'diff-container',           display: 'block', label: 'Diff',      prefix: true, onActivate: (tab) => { if (tab.diffEditor) { setTimeout(() => tab.diffEditor.layout(), 50); } else { closeTab(tab.path); } } },
+  { match: '__diff__',            container: 'diff-container',           display: 'flex',  label: 'Diff',      prefix: true, onActivate: (tab) => { if (tab.diffEditor) { setTimeout(() => tab.diffEditor.layout(), 50); } else { closeTab(tab.path); } } },
+  { match: '__conflict__',        container: 'diff-container',           display: 'flex',  label: 'Conflict',  prefix: true, onActivate: (tab) => { if (tab.diffEditor) { setTimeout(() => tab.diffEditor.layout(), 50); } else { closeTab(tab.path); } } },
   { match: '__errorlog__',        container: 'errorlog-container',       display: 'flex',  label: 'Error Log' },
   { match: '__command-output__',  container: 'command-output-container', display: 'block', label: 'Output' },
   { match: '__db-viewer__',       container: 'db-viewer-container',      display: 'flex',  label: 'Database' },
@@ -3109,7 +3110,7 @@ async function refreshGitStatus() {
   renderGitFiles(files);
 
   // Actualizar badge en el icono de Source Control
-  const totalChanges = (files.staged?.length || 0) + (files.unstaged?.length || 0) + (files.untracked?.length || 0);
+  const totalChanges = (files.staged?.length || 0) + (files.unstaged?.length || 0) + (files.untracked?.length || 0) + (files.conflicted?.length || 0);
   const gitBtn = document.getElementById('btn-toggle-git');
   let badge = gitBtn.querySelector('.action-badge');
   if (totalChanges > 0) {
@@ -3138,11 +3139,15 @@ function renderGitFiles(files) {
 
     const rows = items.map((file) => {
       const fileName = file.path.split(/[/\\]/).pop();
-      const statusLabel = file.status[0].toUpperCase();
+      const statusLabel = type === 'conflicted' ? '!' : file.status[0].toUpperCase();
       const deletedClass = file.status === 'deleted' ? ' git-file-deleted' : '';
+      const statusClass = type === 'conflicted' ? 'conflict' : file.status;
 
       let buttons = '';
-      if (type === 'staged') {
+      if (type === 'conflicted') {
+        // Conflictos: abrir resolver + botón para marcar resuelto (stage)
+        buttons = `<button class="git-action-btn" data-action="stage" data-path="${escapeAttr(file.path)}" data-abs="${escapeAttr(file.absolutePath)}" title="Mark as Resolved (stage)">✓</button>`;
+      } else if (type === 'staged') {
         buttons = `<button class="git-action-btn" data-action="unstage" data-path="${escapeAttr(file.path)}" data-abs="${escapeAttr(file.absolutePath)}" title="Unstage">−</button>`;
       } else if (type === 'unstaged') {
         buttons = `<button class="git-action-btn" data-action="stage" data-path="${escapeAttr(file.path)}" data-abs="${escapeAttr(file.absolutePath)}" title="Stage">+</button>
@@ -3153,7 +3158,7 @@ function renderGitFiles(files) {
 
       return `<div class="git-file-item">
         <span class="git-file-name${deletedClass}" data-type="${type}" data-path="${escapeAttr(file.path)}" data-abs="${escapeAttr(file.absolutePath)}" data-status="${file.status}" title="${escapeAttr(file.path)}">${escapeHtml(fileName)}</span>
-        <span class="git-file-status git-status-${file.status}">${statusLabel}</span>
+        <span class="git-file-status git-status-${statusClass}">${statusLabel}</span>
         <div class="git-file-actions">${buttons}</div>
       </div>`;
     }).join('');
@@ -3169,6 +3174,7 @@ function renderGitFiles(files) {
   }
 
   container.innerHTML =
+    buildSection('Merge Conflicts', files.conflicted || [], 'conflicted') +
     buildSection('Staged Changes', files.staged, 'staged') +
     buildSection('Changes', files.unstaged, 'unstaged') +
     buildSection('Untracked', files.untracked, 'untracked');
@@ -3227,6 +3233,290 @@ async function gitPush() {
   }
 }
 
+// ┌──────────────────────────────────────────────────┐
+// │  7e. GIT CONFLICT RESOLVER                       │
+// │  Vista visual de conflictos de merge. Muestra    │
+// │  ours vs theirs en diff editor con botones       │
+// │  Accept Current / Incoming / Both para resolver  │
+// │  cada archivo en conflicto sin editar markers.   │
+// └──────────────────────────────────────────────────┘
+
+/**
+ * Abre el conflict resolver para un archivo en conflicto.
+ *
+ * Obtiene las versiones "ours" (stage 2) y "theirs" (stage 3) del
+ * index de git, y las muestra en un Monaco DiffEditor con una barra
+ * de herramientas para resolver: Accept Current, Accept Incoming,
+ * Accept Both, o Mark as Resolved (para edición manual).
+ *
+ * @param {string} relativePath - Path relativo al repo
+ * @param {string} absolutePath - Path absoluto en disco
+ * @param {string} fileName - Nombre del archivo
+ */
+async function openConflictView(relativePath, absolutePath, fileName) {
+  const conflictId = `__conflict__${relativePath}`;
+
+  // Si ya está abierto, activar
+  const existing = state.openTabs.find((t) => t.path === conflictId);
+  if (existing) {
+    activateTab(existing);
+    return;
+  }
+
+  // Obtener las tres versiones del conflicto en paralelo
+  const [oursResult, theirsResult, currentResult] = await Promise.all([
+    window.api.gitConflictContent(state.currentFolder, relativePath, 'ours'),
+    window.api.gitConflictContent(state.currentFolder, relativePath, 'theirs'),
+    window.api.readFile(absolutePath),
+  ]);
+
+  const oursContent = oursResult.error ? '' : oursResult.output;
+  const theirsContent = theirsResult.error ? '' : theirsResult.output;
+  const currentContent = currentResult.error ? '' : currentResult.content;
+
+  const ext = fileName.split('.').pop();
+  const language = getMonacoLanguage(ext);
+
+  // Limpiar diff editor anterior si existe
+  const prevDiff = state.openTabs.find((t) => t.path.startsWith('__diff__') && t.diffEditor);
+  if (prevDiff) {
+    try { prevDiff.diffEditor.dispose(); } catch { /* ok */ }
+    if (prevDiff.diffModels) {
+      prevDiff.diffModels.forEach((m) => { try { m.dispose(); } catch { /* ok */ } });
+    }
+    prevDiff.diffEditor = null;
+    prevDiff.diffModels = null;
+  }
+
+  const container = document.getElementById('diff-container');
+  container.innerHTML = '';
+
+  // ── Toolbar de resolución ──────────────────────────────────
+  const toolbar = document.createElement('div');
+  toolbar.className = 'conflict-toolbar';
+  toolbar.innerHTML = `
+    <span class="conflict-toolbar-label">⚡ Merge Conflict — ${escapeHtml(fileName)}</span>
+    <button class="conflict-btn conflict-btn-ours" data-action="ours" title="Accept our version (current branch)">Accept Current</button>
+    <button class="conflict-btn conflict-btn-theirs" data-action="theirs" title="Accept incoming version (merging branch)">Accept Incoming</button>
+    <button class="conflict-btn conflict-btn-both" data-action="both" title="Keep both versions concatenated">Accept Both</button>
+    <button class="conflict-btn conflict-btn-resolve" data-action="resolve" title="Mark file as resolved (stage it as-is)">Mark Resolved</button>
+  `;
+  container.appendChild(toolbar);
+
+  // ── Diff Editor: ours (izquierda) vs theirs (derecha) ──────
+  const diffWrap = document.createElement('div');
+  diffWrap.style.cssText = 'flex:1;min-height:0;';
+  container.appendChild(diffWrap);
+
+  const diffEditor = monaco.editor.createDiffEditor(diffWrap, {
+    theme: document.documentElement.getAttribute('data-theme') === 'light'
+      ? 'mojavecode-php-light' : 'mojavecode-php-dark',
+    readOnly: true,
+    automaticLayout: true,
+    renderSideBySide: true,
+    fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
+    fontSize: 14,
+    lineHeight: 22,
+    minimap: { enabled: false },
+    scrollBeyondLastLine: false,
+  });
+
+  const originalModel = monaco.editor.createModel(oursContent, language);
+  const modifiedModel = monaco.editor.createModel(theirsContent, language);
+  diffEditor.setModel({ original: originalModel, modified: modifiedModel });
+
+  // ── Event handlers para los botones ────────────────────────
+  toolbar.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.conflict-btn');
+    if (!btn) return;
+
+    const action = btn.dataset.action;
+    let resolvedContent;
+
+    if (action === 'ours') {
+      resolvedContent = oursContent;
+    } else if (action === 'theirs') {
+      resolvedContent = theirsContent;
+    } else if (action === 'both') {
+      resolvedContent = oursContent + '\n' + theirsContent;
+    } else if (action === 'resolve') {
+      // Usar el contenido actual del disco (el usuario puede haberlo editado manualmente)
+      const fresh = await window.api.readFile(absolutePath);
+      resolvedContent = fresh.error ? currentContent : fresh.content;
+    }
+
+    // Escribir y stagear el archivo resuelto
+    btn.textContent = 'Resolving...';
+    btn.disabled = true;
+    const result = await window.api.gitConflictResolve(state.currentFolder, relativePath, resolvedContent);
+
+    if (result.error) {
+      alert(`Failed to resolve conflict:\n${result.error}`);
+      btn.textContent = btn.dataset.action === 'resolve' ? 'Mark Resolved' : btn.textContent;
+      btn.disabled = false;
+      return;
+    }
+
+    // Cerrar el tab de conflicto y refrescar el status
+    closeTab(conflictId);
+    refreshGitStatus();
+  });
+
+  // ── Crear el tab ───────────────────────────────────────────
+  const tab = {
+    path: conflictId,
+    name: `${fileName} (Conflict)`,
+    model: null,
+    language,
+    modified: false,
+    diffEditor,
+    diffModels: [originalModel, modifiedModel],
+  };
+
+  state.openTabs.push(tab);
+  activateTab(tab);
+}
+
+// ┌──────────────────────────────────────────────────┐
+// │  7f. GIT STASH UI                                │
+// │  Overlay para listar, crear, aplicar, pop y      │
+// │  eliminar stashes. Sigue el patrón del Branch    │
+// │  Picker: overlay oscuro + caja centrada.         │
+// └──────────────────────────────────────────────────┘
+
+/**
+ * Abre el overlay de stashes. Carga la lista de stashes y la renderiza.
+ * El botón "New Stash" permite guardar los cambios actuales.
+ */
+async function showStashOverlay() {
+  const overlay = document.getElementById('stash-overlay');
+  overlay.style.display = 'flex';
+
+  await renderStashList();
+
+  // Cerrar con Escape
+  const onKey = (e) => {
+    if (e.key === 'Escape') {
+      closeStashOverlay();
+      document.removeEventListener('keydown', onKey);
+    }
+  };
+  document.addEventListener('keydown', onKey);
+
+  // Cerrar al clickear el backdrop
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) closeStashOverlay();
+  }, { once: true });
+
+  // Botón "+ New Stash"
+  const saveBtn = document.getElementById('stash-save-btn');
+  // Remover handler anterior para evitar duplicados
+  const newSaveBtn = saveBtn.cloneNode(true);
+  saveBtn.parentNode.replaceChild(newSaveBtn, saveBtn);
+  newSaveBtn.addEventListener('click', stashSave);
+}
+
+function closeStashOverlay() {
+  document.getElementById('stash-overlay').style.display = 'none';
+}
+
+/**
+ * Carga y renderiza la lista de stashes en el overlay.
+ */
+async function renderStashList() {
+  const list = document.getElementById('stash-list');
+  const empty = document.getElementById('stash-empty');
+  list.innerHTML = '<div class="stash-loading">Loading stashes...</div>';
+  empty.style.display = 'none';
+
+  const result = await window.api.gitStashList(state.currentFolder);
+
+  if (result.error || !result.stashes || result.stashes.length === 0) {
+    list.innerHTML = '';
+    empty.style.display = 'block';
+    return;
+  }
+
+  empty.style.display = 'none';
+  list.innerHTML = result.stashes.map((s) => `
+    <div class="stash-item" data-ref="${escapeAttr(s.ref)}">
+      <div class="stash-item-info">
+        <span class="stash-item-ref">${escapeHtml(s.ref)}</span>
+        <span class="stash-item-message">${escapeHtml(s.message)}</span>
+        <span class="stash-item-date">${escapeHtml(s.date)}</span>
+      </div>
+      <div class="stash-item-actions">
+        <button class="stash-action-btn stash-btn-apply" data-action="apply" data-ref="${escapeAttr(s.ref)}" title="Apply (keep in stash list)">Apply</button>
+        <button class="stash-action-btn stash-btn-pop" data-action="pop" data-ref="${escapeAttr(s.ref)}" title="Apply and remove from stash list">Pop</button>
+        <button class="stash-action-btn stash-btn-drop" data-action="drop" data-ref="${escapeAttr(s.ref)}" title="Delete this stash">Drop</button>
+      </div>
+    </div>
+  `).join('');
+
+  // Event delegation para los botones de acción
+  list.onclick = async (e) => {
+    const btn = e.target.closest('.stash-action-btn');
+    if (!btn) return;
+
+    const action = btn.dataset.action;
+    const ref = btn.dataset.ref;
+
+    if (action === 'drop') {
+      if (!confirm(`Delete ${ref}? This cannot be undone.`)) return;
+    }
+
+    btn.textContent = '...';
+    btn.disabled = true;
+
+    let result;
+    if (action === 'apply') {
+      result = await window.api.gitStashApply(state.currentFolder, ref);
+    } else if (action === 'pop') {
+      result = await window.api.gitStashPop(state.currentFolder, ref);
+    } else if (action === 'drop') {
+      result = await window.api.gitStashDrop(state.currentFolder, ref);
+    }
+
+    if (result.error) {
+      alert(`Stash ${action} failed:\n${result.error}`);
+      btn.textContent = action.charAt(0).toUpperCase() + action.slice(1);
+      btn.disabled = false;
+      return;
+    }
+
+    // Refrescar la lista y el git status
+    await renderStashList();
+    refreshGitStatus();
+  };
+}
+
+/**
+ * Guarda los cambios actuales en un nuevo stash.
+ * Muestra un prompt para un mensaje opcional.
+ */
+async function stashSave() {
+  const message = prompt('Stash message (optional):');
+  if (message === null) return; // cancelled
+
+  const includeUntracked = document.getElementById('stash-include-untracked')?.checked ?? true;
+  const btn = document.getElementById('stash-save-btn');
+  btn.textContent = 'Stashing...';
+  btn.disabled = true;
+
+  const result = await window.api.gitStashSave(state.currentFolder, message || '', includeUntracked);
+
+  btn.textContent = '+ New Stash';
+  btn.disabled = false;
+
+  if (result.error) {
+    alert(`Stash failed:\n${result.error}`);
+    return;
+  }
+
+  await renderStashList();
+  refreshGitStatus();
+}
+
 function initGitPanel() {
   // Commit
   document.getElementById('git-commit-btn').addEventListener('click', gitCommit);
@@ -3234,9 +3524,28 @@ function initGitPanel() {
     if (e.key === 'Enter') gitCommit();
   });
 
-  // Push / Pull
+  // ── Stage All / Unstage All ─────────────────────────────────
+  document.getElementById('git-unstage-all-btn').addEventListener('click', async () => {
+    const btn = document.getElementById('git-unstage-all-btn');
+    btn.textContent = '⟳';
+    btn.disabled = true;
+    await window.api.gitUnstage(state.currentFolder, ['.']);
+    btn.textContent = '−';
+    btn.disabled = false;
+    refreshGitStatus();
+  });
+  document.getElementById('git-stage-all-btn').addEventListener('click', async () => {
+    const btn = document.getElementById('git-stage-all-btn');
+    btn.textContent = '⟳';
+    btn.disabled = true;
+    await window.api.gitAdd(state.currentFolder, ['.']);
+    btn.textContent = '+';
+    btn.disabled = false;
+    refreshGitStatus();
+  });
   document.getElementById('git-pull-btn').addEventListener('click', gitPull);
   document.getElementById('git-push-btn').addEventListener('click', gitPush);
+  document.getElementById('git-stash-btn').addEventListener('click', showStashOverlay);
 
   // Git graph — abrir como tab
   document.getElementById('btn-git-graph')?.addEventListener('click', () => {
@@ -3259,7 +3568,7 @@ function initGitPanel() {
       return;
     }
 
-    // Click en nombre de archivo → abrir diff o archivo
+    // Click en nombre de archivo → abrir diff, conflict view, o archivo
     const nameEl = e.target.closest('.git-file-name');
     if (nameEl) {
       const filePath = nameEl.dataset.path;
@@ -3269,7 +3578,9 @@ function initGitPanel() {
       const fileName = filePath.split(/[/\\]/).pop();
 
       if (status === 'deleted') return;
-      if (type === 'untracked') {
+      if (type === 'conflicted') {
+        openConflictView(filePath, absPath, fileName);
+      } else if (type === 'untracked') {
         openFile(absPath, fileName);
       } else {
         openDiffView(filePath, absPath, fileName, type === 'staged');
@@ -4734,6 +5045,12 @@ function buildCommandRegistry() {
       label: 'Git Push',
       category: 'Git',
       action: () => gitPush(),
+    },
+    {
+      id: 'git.stash',
+      label: 'Git Stash...',
+      category: 'Git',
+      action: () => showStashOverlay(),
     },
 
     // ── Theme ──────────────────────────────────────────────────

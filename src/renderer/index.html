@@ -127,6 +127,8 @@
       <div id="git-panel" style="display:none">
         <div id="git-commit-box">
           <input id="git-commit-input" type="text" placeholder="Commit message..." />
+          <button id="git-unstage-all-btn" title="Unstage All (git reset)">−</button>
+          <button id="git-stage-all-btn" title="Stage All (git add .)">+</button>
           <button id="git-commit-btn" title="Commit">✓</button>
         </div>
         <div id="git-sync-bar">
@@ -137,6 +139,10 @@
           <button id="git-push-btn" title="Push">
             <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
             <span>Push</span>
+          </button>
+          <button id="git-stash-btn" title="Stash changes">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8"/><polyline points="7 12 12 17 17 12"/><line x1="12" y1="3" x2="12" y2="17"/></svg>
+            <span>Stash</span>
           </button>
         </div>
 
@@ -333,6 +339,27 @@
     <div id="branch-picker">
       <input id="branch-picker-input" type="text" placeholder="Search branch..." autocomplete="off" spellcheck="false" />
       <div id="branch-picker-list"></div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       STASH PICKER
+       Panel de gestión de stashes. Se abre desde
+       el botón Stash en el git panel. Mismo patrón
+       que el Branch Picker: overlay oscuro + caja
+       centrada con lista de items.
+       ═══════════════════════════════════════════ -->
+  <div id="stash-overlay" style="display:none">
+    <div id="stash-picker">
+      <div id="stash-picker-header">
+        <span>Stashes</span>
+        <label id="stash-untracked-label" title="Include untracked files when stashing">
+          <input type="checkbox" id="stash-include-untracked" checked> +untracked
+        </label>
+        <button id="stash-save-btn" title="Save current changes to a new stash">+ New Stash</button>
+      </div>
+      <div id="stash-list"></div>
+      <div id="stash-empty" style="display:none">No stashes saved</div>
     </div>
   </div>
 

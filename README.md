@@ -405,6 +405,12 @@ No additional runtime dependencies for database access (uses `mysql`/`psql` CLI)
 
 ## Changelog
 
+### v2.7.0
+
+- **Git Conflict Resolver** — Visual merge conflict resolution. Clicking a conflicted file opens a side-by-side diff (ours vs theirs) with one-click resolution: Accept Current, Accept Incoming, Accept Both, or Mark Resolved. Conflicts appear in a dedicated "Merge Conflicts" section at the top of the Source Control panel.
+- **Git Stash UI** — Full stash management overlay. Create new stashes (with optional message and untracked files), then Apply, Pop, or Drop any saved stash. Accessible from the Stash button in the git panel sync bar or via Command Palette (`Cmd+Shift+P` → "Git Stash...").
+- **Stage All / Unstage All** — Two new buttons in the Source Control commit box: `+` stages all changes (`git add .`), `−` unstages everything (`git reset .`).
+
 ### v2.6.0
 
 - **Laravel Sail Support** — Auto-detects `vendor/bin/sail` + `docker-compose.yml` at project root. Toggle "Run via Sail" from Composer or Artisan menus. Status bar shows ⛵ SAIL or 🐳 DOCKER badge. First-time Docker notice banner with "Don't show again" option.

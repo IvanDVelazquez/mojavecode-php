@@ -606,7 +606,7 @@ function createMenu() {
             dialog.showMessageBox(mainWindow, {
               type: 'info',
               title: 'MojaveCode PHP',
-              message: 'MojaveCode PHP v2.6.0',
+              message: 'MojaveCode PHP v2.7.0',
               detail: 'A lightweight code editor by MojaveWare.\nBuilt with Electron + Monaco + xterm.js',
             });
           },
@@ -1311,7 +1311,7 @@ ipcMain.handle('git:status', async (event, cwd) => {
   const repoRoot = rootResult.error ? cwd : rootResult.output;
 
   const statusMap = { A: 'added', M: 'modified', D: 'deleted', R: 'renamed', C: 'copied' };
-  const files = { staged: [], unstaged: [], untracked: [], repoRoot };
+  const files = { staged: [], unstaged: [], untracked: [], conflicted: [], repoRoot };
 
   function parseNameStatus(output) {
     if (!output) return [];
@@ -1345,6 +1345,27 @@ ipcMain.handle('git:status', async (event, cwd) => {
       const absolutePath = path.join(repoRoot, filePath);
       return { path: filePath, absolutePath, status: 'untracked' };
     });
+  }
+
+  // 4. Conflicted: archivos con merge conflicts (UU, AA, DD, AU, UA, DU, UD)
+  const porcelainResult = await runGit(['status', '--porcelain'], cwd);
+  if (!porcelainResult.error && porcelainResult.output) {
+    const conflictCodes = new Set(['UU', 'AA', 'DD', 'AU', 'UA', 'DU', 'UD']);
+    const conflictPaths = new Set();
+    porcelainResult.output.split('\n').filter(Boolean).forEach((line) => {
+      const xy = line.substring(0, 2);
+      if (conflictCodes.has(xy)) {
+        const filePath = line.substring(3).trim();
+        conflictPaths.add(filePath);
+        const absolutePath = path.join(repoRoot, filePath);
+        files.conflicted.push({ path: filePath, absolutePath, status: 'conflict', conflictType: xy });
+      }
+    });
+    // Quitar archivos en conflicto de staged/unstaged para no duplicar
+    if (conflictPaths.size > 0) {
+      files.staged = files.staged.filter((f) => !conflictPaths.has(f.path));
+      files.unstaged = files.unstaged.filter((f) => !conflictPaths.has(f.path));
+    }
   }
 
   return { files };
@@ -1448,6 +1469,92 @@ ipcMain.handle('git:checkout', async (event, cwd, branch) => {
 // git pull
 ipcMain.handle('git:pull', async (event, cwd) => {
   return runGit(['pull'], cwd);
+});
+
+// ── Git Merge Conflict Resolution ────────────────────────────
+
+/**
+ * Obtener el contenido de un archivo en conflicto para un lado específico.
+ *
+ * Git almacena tres versiones durante un merge en el index:
+ *  - Stage 1 (base): versión ancestro común
+ *  - Stage 2 (ours): nuestra versión (la rama actual)
+ *  - Stage 3 (theirs): la versión entrante (la rama que se mergea)
+ *
+ * @param {string} side - 'base' (stage 1), 'ours' (stage 2), 'theirs' (stage 3)
+ */
+ipcMain.handle('git:conflictContent', async (event, cwd, filePath, side) => {
+  const stageMap = { base: '1', ours: '2', theirs: '3' };
+  const stage = stageMap[side];
+  if (!stage) return { error: `Invalid side: ${side}` };
+  return runGit(['show', `:${stage}:${filePath}`], cwd);
+});
+
+/**
+ * Escribir contenido resuelto y marcar el archivo como resolvido (git add).
+ *
+ * El renderer envía el contenido final tras la resolución manual
+ * o automática (Accept Ours / Accept Theirs / Accept Both).
+ * Escribimos el archivo al disco y luego lo stageamos.
+ */
+ipcMain.handle('git:conflictResolve', async (event, cwd, filePath, content) => {
+  const rootResult = await runGit(['rev-parse', '--show-toplevel'], cwd);
+  const root = rootResult.error ? cwd : rootResult.output;
+  const absPath = path.join(root, filePath);
+  try {
+    fs.writeFileSync(absPath, content, 'utf-8');
+  } catch (err) {
+    return { error: `Failed to write file: ${err.message}` };
+  }
+  return runGit(['add', filePath], cwd);
+});
+
+// ── Git Stash ────────────────────────────────────────────────
+
+/**
+ * Listar todas las entradas del stash.
+ * Devuelve un array de { ref, message, date }.
+ */
+ipcMain.handle('git:stashList', async (event, cwd) => {
+  const result = await runGit(['stash', 'list', '--format=%gd|%gs|%ar'], cwd);
+  if (result.error) return result;
+  if (!result.output) return { stashes: [] };
+  const stashes = result.output.split('\n').filter(Boolean).map((line) => {
+    const [ref, message, date] = line.split('|');
+    return { ref, message: message || '(no message)', date: date || '' };
+  });
+  return { stashes };
+});
+
+/**
+ * Guardar cambios en el stash con un mensaje opcional.
+ * -u incluye archivos untracked para no perderlos.
+ */
+ipcMain.handle('git:stashSave', async (event, cwd, message, includeUntracked) => {
+  const args = ['stash', 'push'];
+  if (includeUntracked) args.push('-u');
+  if (message) args.push('-m', message);
+  return runGit(args, cwd);
+});
+
+// Aplicar un stash sin eliminarlo de la lista
+ipcMain.handle('git:stashApply', async (event, cwd, ref) => {
+  return runGit(['stash', 'apply', ref], cwd);
+});
+
+// Aplicar un stash y eliminarlo de la lista
+ipcMain.handle('git:stashPop', async (event, cwd, ref) => {
+  return runGit(['stash', 'pop', ref], cwd);
+});
+
+// Eliminar un stash de la lista
+ipcMain.handle('git:stashDrop', async (event, cwd, ref) => {
+  return runGit(['stash', 'drop', ref], cwd);
+});
+
+// Ver el diff de un stash (para preview)
+ipcMain.handle('git:stashShow', async (event, cwd, ref) => {
+  return runGit(['stash', 'show', '-p', ref], cwd);
 });
 
 // git graph log — devuelve commits con info de padres, ramas y tags

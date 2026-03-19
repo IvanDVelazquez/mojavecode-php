@@ -422,6 +422,12 @@ Sin dependencias adicionales de runtime para acceso a base de datos (usa CLI de 
 
 ## Changelog
 
+### v2.7.0
+
+- **Git Conflict Resolver** — Resolución visual de conflictos de merge. Al hacer click en un archivo en conflicto se abre un diff lado a lado (ours vs theirs) con resolución de un click: Accept Current, Accept Incoming, Accept Both, o Mark Resolved. Los conflictos aparecen en una sección dedicada "Merge Conflicts" al tope del panel Source Control.
+- **Git Stash UI** — Overlay completo de gestión de stashes. Crea stashes nuevos (con mensaje opcional y archivos untracked), luego Apply, Pop o Drop cualquier stash guardado. Accesible desde el botón Stash en la barra de sync o via Command Palette (`Cmd+Shift+P` → "Git Stash...").
+- **Stage All / Unstage All** — Dos botones nuevos en el commit box de Source Control: `+` stagea todos los cambios (`git add .`), `−` quita todo del staging (`git reset .`).
+
 ### v2.6.0
 
 - **Soporte Laravel Sail** — Detecta automáticamente `vendor/bin/sail` + `docker-compose.yml` en la raíz del proyecto. Toggle "Run via Sail" desde los menús Composer o Artisan. Badge ⛵ SAIL o 🐳 DOCKER en la barra de estado. Banner informativo de Docker con opción "No mostrar de nuevo".

@@ -752,6 +752,37 @@ body {
   color: var(--text-muted);
 }
 
+#git-stage-all-btn,
+#git-unstage-all-btn {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 14px;
+  font-weight: bold;
+  width: 32px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+#git-stage-all-btn:hover {
+  background: var(--accent-blue);
+  color: #fff;
+  border-color: var(--accent-blue);
+}
+
+#git-unstage-all-btn:hover {
+  background: var(--accent-yellow);
+  color: #1a1a2e;
+  border-color: var(--accent-yellow);
+}
+
+#git-stage-all-btn:disabled,
+#git-unstage-all-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 #git-commit-btn {
   background: var(--accent-green);
   color: #fff;
@@ -936,6 +967,7 @@ body {
 .git-status-deleted { color: var(--accent-red); }
 .git-status-untracked { color: var(--text-muted); }
 .git-status-renamed { color: var(--accent-blue); }
+.git-status-conflict { color: #ff6b6b; font-weight: 700; }
 
 #git-graph-placeholder {
   padding: 12px;
@@ -1548,6 +1580,7 @@ body {
   flex: 1;
   overflow: hidden;
   display: none;
+  flex-direction: column;
 }
 
 /* ─── QUICK OPEN (Cmd+P) ─── */
@@ -2380,6 +2413,209 @@ body {
   color: var(--text-muted);
   flex-shrink: 0;
 }
+
+/* ─── CONFLICT TOOLBAR ─── */
+/* Barra de herramientas que aparece sobre el diff editor cuando se
+   abre un archivo en conflicto. Muestra botones para resolver el
+   conflicto: Accept Current (ours), Accept Incoming (theirs),
+   Accept Both, o Mark Resolved (para edición manual). */
+.conflict-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: var(--bg-dark);
+  border-bottom: 2px solid #ff6b6b;
+  flex-shrink: 0;
+}
+
+.conflict-toolbar-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #ff6b6b;
+  margin-right: auto;
+  white-space: nowrap;
+}
+
+.conflict-btn {
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: var(--font-ui);
+  cursor: pointer;
+  border: 1px solid transparent;
+  color: #fff;
+  transition: opacity 0.15s;
+  white-space: nowrap;
+}
+
+.conflict-btn:hover { opacity: 0.85; }
+.conflict-btn:disabled { opacity: 0.5; cursor: default; }
+
+.conflict-btn-ours    { background: var(--accent-teal); }
+.conflict-btn-theirs  { background: var(--accent-blue); }
+.conflict-btn-both    { background: var(--accent-yellow); color: #1a1a2e; }
+.conflict-btn-resolve { background: var(--accent-green); }
+
+/* ─── STASH PICKER ─── */
+/* Overlay y panel para gestionar stashes. Sigue el mismo patrón
+   visual que el Branch Picker: overlay oscuro + caja centrada,
+   lista de items con acciones hover (Apply, Pop, Drop). */
+#stash-overlay {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.4);
+  z-index: 2000;
+  display: flex;
+  justify-content: center;
+  padding-top: 80px;
+}
+
+#stash-picker {
+  width: 520px;
+  max-height: 460px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  align-self: flex-start;
+}
+
+#stash-picker-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-dark);
+}
+
+#stash-picker-header span {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  flex: 1;
+}
+
+#stash-untracked-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+#stash-save-btn {
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: var(--font-ui);
+  cursor: pointer;
+  border: 1px solid var(--accent-primary);
+  background: var(--accent-primary);
+  color: #fff;
+  transition: opacity 0.15s;
+  white-space: nowrap;
+}
+
+#stash-save-btn:hover { opacity: 0.85; }
+#stash-save-btn:disabled { opacity: 0.5; cursor: default; }
+
+#stash-list {
+  overflow-y: auto;
+  max-height: 380px;
+}
+
+#stash-empty {
+  padding: 24px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.stash-loading {
+  padding: 16px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.stash-item {
+  display: flex;
+  align-items: center;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border-subtle, var(--border));
+  transition: background 0.1s;
+}
+
+.stash-item:hover {
+  background: var(--bg-hover);
+}
+
+.stash-item-info {
+  flex: 1;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.stash-item-ref {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent-teal);
+  flex-shrink: 0;
+}
+
+.stash-item-message {
+  font-size: 12px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stash-item-date {
+  font-size: 10px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.stash-item-actions {
+  display: none;
+  gap: 4px;
+  margin-left: 8px;
+  flex-shrink: 0;
+}
+
+.stash-item:hover .stash-item-actions {
+  display: flex;
+}
+
+.stash-action-btn {
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-family: var(--font-ui);
+  cursor: pointer;
+  border: 1px solid transparent;
+  color: #fff;
+  transition: opacity 0.15s;
+}
+
+.stash-action-btn:hover { opacity: 0.85; }
+.stash-action-btn:disabled { opacity: 0.5; cursor: default; }
+
+.stash-btn-apply { background: var(--accent-teal); }
+.stash-btn-pop   { background: var(--accent-blue); }
+.stash-btn-drop  { background: var(--accent-red); }
 
 /* ─── COMMAND OUTPUT PANEL (Composer/Artisan results) ─── */
 #command-output-container {
