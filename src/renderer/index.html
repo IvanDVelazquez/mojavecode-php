@@ -155,60 +155,122 @@
     <!-- SIDEBAR RESIZE HANDLE -->
     <div id="sidebar-resize-handle"></div>
 
-    <!-- EDITOR AREA: tabs + monaco + terminal -->
+    <!-- EDITOR AREA: dos panes de edición + resizer entre ellos -->
     <div id="editor-area">
 
-      <!-- TAB BAR -->
-      <div id="tab-bar"></div>
+      <!-- ══════════════════════════════════════════════════════
+           PANE IZQUIERDO — editor principal + todos los containers
+           especiales (terminal, db, routes, logs, etc.)
+           ══════════════════════════════════════════════════════ -->
+      <div id="pane-left">
 
-      <!-- BREADCRUMB BAR (ruta del archivo activo) -->
-      <div id="breadcrumb-bar"></div>
-
-      <!-- Welcome screen (se oculta al abrir un archivo) -->
-      <div id="welcome">
-        <div class="welcome-logo">MC_</div>
-        <div class="welcome-subtitle">MojaveCode PHP Editor</div>
-        <div class="welcome-hint">
-          Open a folder to get started<br>
-          <kbd>Ctrl+O</kbd> Open Folder &nbsp;|&nbsp;
-          <kbd>Ctrl+`</kbd> Toggle Terminal
+        <!-- TAB BAR WRAPPER: tabs del pane izquierdo + botón split -->
+        <div id="tab-bar-wrapper">
+          <div id="tab-bar"></div>
+          <button id="btn-split-editor" class="tab-bar-action-btn" title="Split Editor (⌘\)">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
+          </button>
         </div>
-        <!-- Lista de carpetas recientes (se llena dinámicamente) -->
-        <div id="welcome-recent"></div>
+
+        <!-- BREADCRUMB BAR (ruta del archivo activo en pane izquierdo) -->
+        <div id="breadcrumb-bar"></div>
+
+        <!-- FILE CHANGED BAR — aparece cuando un archivo abierto fue modificado
+             externamente (git, artisan, formatter externo, etc.) y tiene cambios
+             sin guardar en el editor. Se oculta al recargar o descartar. -->
+        <div id="file-changed-bar" style="display:none">
+          <span id="file-changed-msg"></span>
+          <div class="file-changed-actions">
+            <button id="file-changed-reload">Reload from disk</button>
+            <button id="file-changed-keep">Keep mine</button>
+          </div>
+        </div>
+
+        <!-- Welcome screen (se oculta al abrir un archivo) -->
+        <div id="welcome">
+          <div class="welcome-logo">MC_</div>
+          <div class="welcome-subtitle">MojaveCode PHP Editor</div>
+          <div class="welcome-hint">
+            Open a folder to get started<br>
+            <kbd>Ctrl+O</kbd> Open Folder &nbsp;|&nbsp;
+            <kbd>Ctrl+`</kbd> Toggle Terminal
+          </div>
+          <!-- Lista de carpetas recientes (se llena dinámicamente) -->
+          <div id="welcome-recent"></div>
+        </div>
+
+        <!-- MONACO EDITOR CONTAINER -->
+        <div id="editor-container"></div>
+
+        <!-- TERMINAL CONTAINER (se muestra como tab) -->
+        <div id="terminal-container"></div>
+
+        <!-- GIT GRAPH CONTAINER (se muestra como tab) -->
+        <div id="git-graph-container"></div>
+
+        <!-- DIFF EDITOR CONTAINER (se muestra como tab) -->
+        <div id="diff-container"></div>
+
+        <!-- ERROR LOG CONTAINER (se muestra como tab) -->
+        <div id="errorlog-container"></div>
+
+        <!-- COMMAND OUTPUT CONTAINER (Composer/Artisan results) -->
+        <div id="command-output-container"></div>
+
+        <!-- DATABASE VIEWER CONTAINER -->
+        <div id="db-viewer-container"></div>
+
+        <!-- ROUTE LIST CONTAINER -->
+        <div id="route-list-container"></div>
+
+        <!-- LOG VIEWER CONTAINER -->
+        <div id="log-viewer-container"></div>
+
+        <!-- CLAUDE DETAIL CONTAINER (skill / agent dashboard) -->
+        <div id="claude-detail-container"></div>
+
+        <!-- HISTORY DETAIL CONTAINER (prompt + response view) -->
+        <div id="history-detail-container"></div>
+
       </div>
 
-      <!-- MONACO EDITOR CONTAINER -->
-      <div id="editor-container"></div>
+      <!-- ══════════════════════════════════════════════════════
+           RESIZER — arrastrable para ajustar el ancho de los panes
+           Oculto por defecto; visible solo en modo split.
+           ══════════════════════════════════════════════════════ -->
+      <div id="split-resizer"></div>
 
-      <!-- TERMINAL CONTAINER (se muestra como tab) -->
-      <div id="terminal-container"></div>
+      <!-- ══════════════════════════════════════════════════════
+           PANE DERECHO — segundo editor independiente.
+           Solo muestra archivos de código (no tabs especiales).
+           Oculto por defecto; visible solo en modo split.
+           ══════════════════════════════════════════════════════ -->
+      <div id="pane-right">
 
-      <!-- GIT GRAPH CONTAINER (se muestra como tab) -->
-      <div id="git-graph-container"></div>
+        <!-- TAB BAR DERECHO: tabs + botón cerrar split -->
+        <div id="tab-bar-wrapper-right">
+          <div id="tab-bar-right"></div>
+          <button id="btn-close-split" class="tab-bar-action-btn" title="Close Split (⌘\)">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
 
-      <!-- DIFF EDITOR CONTAINER (se muestra como tab) -->
-      <div id="diff-container"></div>
+        <!-- BREADCRUMB BAR del pane derecho -->
+        <div id="breadcrumb-bar-right"></div>
 
-      <!-- ERROR LOG CONTAINER (se muestra como tab) -->
-      <div id="errorlog-container"></div>
+        <!-- Welcome del pane derecho (visible cuando no hay archivo abierto) -->
+        <div id="welcome-right">
+          <span>Open a file to edit here</span>
+        </div>
 
-      <!-- COMMAND OUTPUT CONTAINER (Composer/Artisan results) -->
-      <div id="command-output-container"></div>
+        <!-- Monaco editor del pane derecho (creado lazy al habilitar split) -->
+        <div id="editor-container-right"></div>
 
-      <!-- DATABASE VIEWER CONTAINER -->
-      <div id="db-viewer-container"></div>
+        <!-- Overlay transparente que se activa durante drag-and-drop para
+             interceptar los eventos antes de que los absorba Monaco -->
+        <div id="split-drop-overlay"></div>
 
-      <!-- ROUTE LIST CONTAINER -->
-      <div id="route-list-container"></div>
-
-      <!-- LOG VIEWER CONTAINER -->
-      <div id="log-viewer-container"></div>
-
-      <!-- CLAUDE DETAIL CONTAINER (skill / agent dashboard) -->
-      <div id="claude-detail-container"></div>
-
-      <!-- HISTORY DETAIL CONTAINER (prompt + response view) -->
-      <div id="history-detail-container"></div>
+      </div>
 
     </div>
   </div>
@@ -236,6 +298,16 @@
       <input id="symbol-search-input" type="text" placeholder="Search symbols by name..." autocomplete="off" spellcheck="false" />
       <div id="symbol-search-status"></div>
       <div id="symbol-search-results"></div>
+    </div>
+  </div>
+
+  <!-- COMMAND PALETTE (Cmd+Shift+P) -->
+  <div id="command-palette-overlay" style="display:none">
+    <div id="command-palette">
+      <div id="command-palette-header">
+        <input id="command-palette-input" type="text" placeholder="Type a command..." autocomplete="off" spellcheck="false" />
+      </div>
+      <div id="command-palette-results"></div>
     </div>
   </div>
 

@@ -577,7 +577,7 @@ function createMenu() {
             dialog.showMessageBox(mainWindow, {
               type: 'info',
               title: 'MojaveCode PHP',
-              message: 'MojaveCode PHP v2.4.0',
+              message: 'MojaveCode PHP v2.5.0',
               detail: 'A lightweight code editor by MojaveWare.\nBuilt with Electron + Monaco + xterm.js',
             });
           },
@@ -837,11 +837,106 @@ ipcMain.handle('fs:readFile', async (event, filePath) => {
  */
 ipcMain.handle('fs:writeFile', async (event, filePath, content) => {
   try {
+    // Marcar el archivo antes de escribir para que el watcher lo ignore.
+    // fs.watch dispara cuando escribimos nosotros también — esto evita el
+    // falso positivo de "archivo cambió externamente" tras un Cmd+S.
+    markRecentlySaved(filePath);
     await fs.promises.writeFile(filePath, content, 'utf-8');
     return { success: true, error: null };
   } catch (err) {
     return { success: false, error: err.message };
   }
+});
+
+// ────────────────────────────────────────────────────────────────
+// FILE WATCHER — detectar cambios externos en archivos abiertos
+// ────────────────────────────────────────────────────────────────
+//
+// Observa los archivos que el renderer tiene abiertos en tabs.
+// Cuando un proceso externo los modifica (git checkout, artisan,
+// un formatter corriendo fuera del editor, etc.) notificamos al
+// renderer para que ofrezca recargar el contenido.
+//
+// DETALLES DE IMPLEMENTACIÓN:
+// ─────────────────────────────
+// • Usa fs.watch() por archivo — sin dependencias extra.
+// • fs.watch() puede disparar 2–3 veces por un solo guardado en
+//   macOS (evento 'rename' + 'change'). Debounce de 300ms lo filtra.
+// • Cuando somos nosotros quienes escribimos (fs:writeFile), llamamos
+//   markRecentlySaved() para ignorar el evento durante 1 segundo.
+// • Al cerrar el proyecto (watch:clear) todos los watchers se destruyen.
+
+const fileWatchers   = new Map(); // filePath → FSWatcher
+const watchDebounce  = new Map(); // filePath → timer de debounce
+const recentlySaved  = new Set(); // archivos que acabamos de escribir nosotros
+
+/**
+ * Registra que acabamos de escribir este archivo.
+ * El watcher lo ignorará durante 1 segundo para evitar el falso positivo.
+ *
+ * @param {string} filePath
+ */
+function markRecentlySaved(filePath) {
+  recentlySaved.add(filePath);
+  setTimeout(() => recentlySaved.delete(filePath), 1000);
+}
+
+/**
+ * Empieza a observar un archivo. Si ya está siendo observado, no hace nada.
+ * Cuando detecta un cambio externo, envía 'file:changed' al renderer.
+ */
+ipcMain.handle('watch:add', (event, filePath) => {
+  if (fileWatchers.has(filePath)) return;
+  try {
+    const watcher = fs.watch(filePath, (eventType) => {
+      if (eventType !== 'change') return;
+      if (recentlySaved.has(filePath)) return;
+
+      // Debounce: ignorar disparos duplicados del mismo evento
+      clearTimeout(watchDebounce.get(filePath));
+      watchDebounce.set(filePath, setTimeout(() => {
+        watchDebounce.delete(filePath);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('file:changed', filePath);
+        }
+      }, 300));
+    });
+
+    watcher.on('error', () => {
+      fileWatchers.delete(filePath);
+      watchDebounce.delete(filePath);
+    });
+
+    fileWatchers.set(filePath, watcher);
+  } catch {
+    // El archivo puede no existir todavía — ignorar silenciosamente
+  }
+});
+
+/**
+ * Deja de observar un archivo y limpia sus timers pendientes.
+ */
+ipcMain.handle('watch:remove', (event, filePath) => {
+  const watcher = fileWatchers.get(filePath);
+  if (watcher) {
+    try { watcher.close(); } catch {}
+    fileWatchers.delete(filePath);
+  }
+  clearTimeout(watchDebounce.get(filePath));
+  watchDebounce.delete(filePath);
+});
+
+/**
+ * Destruye todos los watchers activos. Se llama al cerrar un proyecto.
+ */
+ipcMain.handle('watch:clear', () => {
+  for (const watcher of fileWatchers.values()) {
+    try { watcher.close(); } catch {}
+  }
+  fileWatchers.clear();
+  for (const timer of watchDebounce.values()) clearTimeout(timer);
+  watchDebounce.clear();
+  recentlySaved.clear();
 });
 
 /**
@@ -1670,18 +1765,24 @@ function getDbConfig() {
 }
 
 // Helper: obtener config de DB ajustada para ejecución local.
-// Si el .env usa host.docker.internal (hostname Docker→host), lo reemplaza
-// por 127.0.0.1 ya que desde la máquina local es equivalente.
+// • MySQL/PostgreSQL: reemplaza host.docker.internal → 127.0.0.1
+// • SQLite: resuelve filePath relativo usando la raíz del proyecto
 function getLocalDbConfig() {
   const { error, config: cfg } = getDbConfig();
   if (error) return { error };
-  if (cfg.host === 'host.docker.internal') {
+  if (cfg.connection === 'sqlite') {
+    if (cfg.filePath && !path.isAbsolute(cfg.filePath)) {
+      cfg.filePath = path.join(projectCapabilities.projectRoot, cfg.filePath);
+    }
+  } else if (cfg.host === 'host.docker.internal') {
     cfg.host = '127.0.0.1';
   }
   return { config: cfg };
 }
 
-// Helper: obtener todas las conexiones de DB, ajustadas para local
+// Helper: obtener todas las conexiones de DB, ajustadas para local.
+// Para SQLite resuelve el filePath relativo al root del proyecto,
+// ya que Laravel almacena DB_DATABASE como "database/database.sqlite".
 function getAllLocalDbConfigs() {
   if (!projectCapabilities.projectRoot) return { error: 'No project open' };
   const env = db.parseEnvFile(projectCapabilities.projectRoot);
@@ -1689,7 +1790,12 @@ function getAllLocalDbConfigs() {
   const connections = db.getAllConnectionConfigs(env);
   if (connections.length === 0) return { error: 'No database configured in .env' };
   for (const conn of connections) {
-    if (conn.config.host === 'host.docker.internal') {
+    if (conn.config.connection === 'sqlite') {
+      // Resolver path relativo → absoluto usando la raíz del proyecto
+      if (conn.config.filePath && !path.isAbsolute(conn.config.filePath)) {
+        conn.config.filePath = path.join(projectCapabilities.projectRoot, conn.config.filePath);
+      }
+    } else if (conn.config.host === 'host.docker.internal') {
       conn.config.host = '127.0.0.1';
     }
   }
@@ -1720,9 +1826,16 @@ ipcMain.handle('db:getTables', async (event, connKey) => {
   const { error, config: cfg } = connKey ? getLocalDbConfigByKey(connKey) : getLocalDbConfig();
   if (error) return { error };
 
-  const sql = cfg.connection === 'pgsql'
-    ? "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename"
-    : 'SHOW TABLES';
+  let sql;
+  if (cfg.connection === 'sqlite') {
+    // sqlite_master contiene todas las tablas del archivo; excluimos las
+    // tablas internas de SQLite (prefijo "sqlite_") que no son del usuario.
+    sql = "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name";
+  } else if (cfg.connection === 'pgsql') {
+    sql = "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename";
+  } else {
+    sql = 'SHOW TABLES';
+  }
 
   const result = await db.execDb(cfg, sql);
   if (result.error) return result;
@@ -1733,17 +1846,31 @@ ipcMain.handle('db:getColumns', async (event, tableName, connKey) => {
   const { error, config: cfg } = connKey ? getLocalDbConfigByKey(connKey) : getLocalDbConfig();
   if (error) return { error };
 
-  const safeName = db.sanitizeValue(tableName);
+  const safeName = db.sanitizeIdentifier(tableName);
   let sql, parseRow;
 
-  if (cfg.connection === 'pgsql') {
-    sql = `SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_name = '${safeName}' ORDER BY ordinal_position`;
+  if (cfg.connection === 'sqlite') {
+    // PRAGMA table_info devuelve: cid | name | type | notnull | dflt_value | pk
+    // No existe information_schema en SQLite — PRAGMA es el único camino.
+    sql = `PRAGMA table_info("${safeName}")`;
+    parseRow = (line) => {
+      const parts = line.split('\t');
+      return {
+        name: parts[1] || '',
+        type: parts[2] || 'TEXT',
+        nullable: parts[3] === '0',
+        key: parts[5] === '1' ? 'PRI' : null,
+        default: parts[4] || null,
+      };
+    };
+  } else if (cfg.connection === 'pgsql') {
+    sql = `SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_name = '${db.sanitizeValue(tableName)}' ORDER BY ordinal_position`;
     parseRow = (line) => {
       const [name, type, nullable, defaultVal] = line.split('|');
       return { name, type, nullable: nullable === 'YES', default: defaultVal || null };
     };
   } else {
-    sql = `SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_KEY, COLUMN_DEFAULT FROM information_schema.columns WHERE TABLE_SCHEMA = '${db.sanitizeValue(cfg.database)}' AND TABLE_NAME = '${safeName}' ORDER BY ORDINAL_POSITION`;
+    sql = `SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_KEY, COLUMN_DEFAULT FROM information_schema.columns WHERE TABLE_SCHEMA = '${db.sanitizeValue(cfg.database)}' AND TABLE_NAME = '${db.sanitizeValue(tableName)}' ORDER BY ORDINAL_POSITION`;
     parseRow = (line) => {
       const [name, type, nullable, key, defaultVal] = line.split('\t');
       return { name, type, nullable: nullable === 'YES', key: key || null, default: defaultVal || null };
@@ -1778,7 +1905,8 @@ ipcMain.handle('db:query', async (event, tableName, column, operator, value, lim
   }
 
   let sql = `SELECT * FROM \`${safeTable}\` ${whereClause} LIMIT ${safeLimit}`;
-  if (cfg.connection === 'pgsql') sql = sql.replace(/`/g, '"');
+  // SQLite y PostgreSQL usan comillas dobles para identificadores, no backticks
+  if (cfg.connection === 'pgsql' || cfg.connection === 'sqlite') sql = sql.replace(/`/g, '"');
 
   const result = await db.execDb(cfg, sql, { csv: true });
   if (result.error) return { error: result.error, sql };
@@ -1786,7 +1914,8 @@ ipcMain.handle('db:query', async (event, tableName, column, operator, value, lim
   const lines = result.output.split('\n');
   if (lines.length < 1) return { columns: [], rows: [], sql };
 
-  if (cfg.connection === 'pgsql') {
+  // SQLite con -csv produce el mismo formato CSV que psql --csv
+  if (cfg.connection === 'pgsql' || cfg.connection === 'sqlite') {
     return { columns: db.parseCsvLine(lines[0]), rows: lines.slice(1).filter(Boolean).map(db.parseCsvLine), sql };
   }
   return { columns: lines[0].split('\t'), rows: lines.slice(1).filter(Boolean).map((l) => l.split('\t')), sql };
@@ -1804,7 +1933,12 @@ ipcMain.handle('db:update', async (event, tableName, pkColumn, pkValue, column, 
     : `\`${safeCol}\` = '${db.sanitizeValue(newValue)}'`;
 
   let sql = `UPDATE \`${safeTable}\` SET ${setClause} WHERE \`${safePkCol}\` = '${db.sanitizeValue(pkValue)}' LIMIT 1`;
-  if (cfg.connection === 'pgsql') sql = sql.replace(/`/g, '"').replace(/ LIMIT 1/, '');
+  // SQLite no soporta UPDATE ... LIMIT sin compilar con SQLITE_ENABLE_UPDATE_DELETE_LIMIT;
+  // PostgreSQL tampoco acepta LIMIT en UPDATE — ambos usan subquery si fuera necesario,
+  // pero como filtramos por PK ya es implícitamente único.
+  if (cfg.connection === 'pgsql' || cfg.connection === 'sqlite') {
+    sql = sql.replace(/`/g, '"').replace(/ LIMIT 1/, '');
+  }
 
   const result = await db.execDb(cfg, sql);
   if (result.error) return { error: result.error, sql };

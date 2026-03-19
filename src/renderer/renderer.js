@@ -42,7 +42,7 @@ const state = {
   sidebarVisible: true,
   sidebarView: 'explorer',   // 'explorer' | 'git' | 'search'
   gitRefreshTimer: null,
-  editor: null,                // Instancia de Monaco
+  editor: null,                // Instancia de Monaco (pane izquierdo)
   terminal: null,              // Instancia de xterm.js
   terminalFitAddon: null,
   terminalResizeObserver: null, // ResizeObserver del terminal container
@@ -56,6 +56,14 @@ const state = {
     max: 40,
     step: 1,
   },
+  // ── Split editor ─────────────────────────────────────────────
+  split: false,                // Split activo o no
+  editorRight: null,           // Monaco del pane derecho (creado lazy)
+  openTabsRight: [],           // Tabs del pane derecho
+  activeTabRight: null,        // Tab activo en pane derecho
+  activePaneRight: false,      // true = foco en el pane derecho
+  // ── Project capabilities ─────────────────────────────────────
+  projectCaps: {},             // { hasComposer, hasArtisan, hasPint, hasPhpUnit, ... }
 };
 
 // ┌──────────────────────────────────────────────────┐
@@ -203,6 +211,12 @@ function initEditor() {
     () => toggleQuickOpen()
   );
 
+  // Keybinding: Cmd+Shift+P → Command Palette (interceptar antes que Monaco)
+  state.editor.addCommand(
+    monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyP,
+    () => toggleCommandPalette()
+  );
+
   // Keybinding: Cmd+W → cerrar tab activo
   state.editor.addCommand(
     monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyW,
@@ -284,6 +298,8 @@ function applyZoom(size) {
   // lineHeight proporcional: ratio 22/14 ≈ 1.57 del default
   const lineHeight = Math.round(clamped * (22 / 14));
   state.editor.updateOptions({ fontSize: clamped, lineHeight });
+  // Sincronizar zoom con el pane derecho si el split está activo
+  if (state.editorRight) state.editorRight.updateOptions({ fontSize: clamped, lineHeight });
   localStorage.setItem('mojavecode-zoom-fontSize', clamped);
   updateZoomIndicator();
 }
@@ -922,6 +938,9 @@ async function openFile(filePath, fileName) {
   state.openTabs.push(tab);
   activateTab(tab);
 
+  // Empezar a observar el archivo para detectar cambios externos
+  window.api.watchAdd(filePath);
+
   // Notificar al LSP si es un archivo PHP
   if (typeof lspTrackModel === 'function') {
     lspTrackModel(model, language);
@@ -1081,14 +1100,20 @@ function closeTab(tabPath) {
     document.getElementById('diff-container').innerHTML = '';
   }
 
-  // Notificar al LSP y destruir model (solo para tabs de archivo, no especiales)
+  // Notificar al LSP y destruir model (solo para tabs de archivo, no especiales).
+  // IMPORTANTE: no destruir el model si el mismo archivo está abierto en el
+  // pane derecho — ambos panes comparten el mismo TextModel y al dispose()
+  // lo eliminaría de los dos editores simultáneamente.
   const isSpecialTab = tab.path.startsWith('__');
-  if (!isSpecialTab && tab.model) {
+  const isAlsoInRightPane = state.openTabsRight.some((t) => t.path === tab.path);
+  if (!isSpecialTab && tab.model && !isAlsoInRightPane) {
     if (typeof lspUntrackModel === 'function') {
       lspUntrackModel(tab.model);
     }
     try { tab.model.dispose(); } catch { /* ya dispuesto */ }
     tab.model = null;
+    // Dejar de observar el archivo solo si ya no está en ningún pane
+    window.api.watchRemove(tab.path);
   }
 
   state.openTabs.splice(idx, 1);
@@ -1142,6 +1167,9 @@ function closeAllTabs() {
   state.openTabs = [];
   state.activeTab = null;
 
+  // Destruir todos los watchers de archivos de una vez
+  window.api.watchClear();
+
   document.getElementById('diff-container').innerHTML = '';
   document.getElementById('git-graph-container').innerHTML = '';
   document.getElementById('welcome').style.display = 'flex';
@@ -1149,6 +1177,18 @@ function closeAllTabs() {
   document.getElementById('terminal-container').style.display = 'none';
   document.getElementById('git-graph-container').style.display = 'none';
   document.getElementById('diff-container').style.display = 'none';
+
+  // Limpiar pane derecho si el split estaba activo
+  if (state.split) {
+    state.openTabsRight = [];
+    state.activeTabRight = null;
+    state.activePaneRight = false;
+    if (state.editorRight) state.editorRight.setModel(null);
+    document.getElementById('editor-container-right').style.display = 'none';
+    document.getElementById('welcome-right').style.display = 'flex';
+    document.getElementById('breadcrumb-bar-right').style.display = 'none';
+    renderTabsRight();
+  }
 
   renderTabs();
   updateBreadcrumb();
@@ -1231,7 +1271,12 @@ function renderTabs() {
 
   let draggedPath = null;
 
+  const overlay   = document.getElementById('split-drop-overlay');
+  const paneRight = document.getElementById('pane-right');
+
   // ── Inicio del drag: marcar el tab como "en vuelo" ──
+  // Si el split está activo, mostramos el overlay sobre el pane derecho
+  // para que capture los eventos de drag que Monaco absorbería.
   bar.addEventListener('dragstart', (e) => {
     const tabEl = e.target.closest('.tab');
     if (!tabEl) return;
@@ -1239,6 +1284,7 @@ function renderTabs() {
     tabEl.classList.add('tab-dragging');
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setDragImage(tabEl, tabEl.offsetWidth / 2, tabEl.offsetHeight / 2);
+    if (state.split) overlay.style.display = 'block';
   });
 
   // ── Mientras se arrastra sobre otros tabs ──
@@ -1302,11 +1348,390 @@ function renderTabs() {
   // ── Cleanup: siempre limpiar las clases de feedback ──
   bar.addEventListener('dragend', () => {
     draggedPath = null;
+    overlay.style.display = 'none';
+    paneRight.classList.remove('split-drop-target');
     bar.querySelectorAll('.tab').forEach(t => {
       t.classList.remove('tab-dragging', 'tab-drop-before', 'tab-drop-after');
     });
   });
+
+  // ── Drop zone del pane derecho ─────────────────────────────────
+  // El overlay intercepta los eventos que Monaco absorbería.
+  // draggedPath es accesible directamente desde este mismo closure.
+  overlay.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    paneRight.classList.add('split-drop-target');
+  });
+
+  overlay.addEventListener('dragleave', () => {
+    paneRight.classList.remove('split-drop-target');
+  });
+
+  overlay.addEventListener('drop', (e) => {
+    e.preventDefault();
+    overlay.style.display = 'none';
+    paneRight.classList.remove('split-drop-target');
+    if (!draggedPath || draggedPath.startsWith('__')) return;
+    const tab = state.openTabs.find((t) => t.path === draggedPath);
+    if (tab) openFileInRightPane(tab.path, tab.name);
+  });
 })();
+
+// ┌──────────────────────────────────────────────────┐
+// │  SPLIT EDITOR                                    │
+// │  Dos paneles de código independientes, cada uno  │
+// │  con su propio Monaco, tab bar y lista de tabs.  │
+// │  Toggle con Cmd+\ o el botón en el tab bar.      │
+// └──────────────────────────────────────────────────┘
+
+/**
+ * Crea el Monaco editor del pane derecho la primera vez que se habilita
+ * el split. Las llamadas siguientes retornan de inmediato (lazy init).
+ *
+ * El editor derecho comparte la misma configuración visual que el izquierdo
+ * (tema, fuente, tamaño) y escucha eventos para actualizar el status bar
+ * y marcar tabs como modificados.
+ */
+function ensureRightEditor() {
+  if (state.editorRight) return;
+
+  state.editorRight = monaco.editor.create(
+    document.getElementById('editor-container-right'),
+    {
+      theme: state.editor.getRawOptions().theme || 'mojavecode-php-dark',
+      fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
+      fontSize: state.zoom.fontSize,
+      lineHeight: 22,
+      minimap: { enabled: true },
+      scrollBeyondLastLine: false,
+      renderWhitespace: 'selection',
+      bracketPairColorization: { enabled: true },
+      guides: { indentation: true },
+      padding: { top: 8 },
+      automaticLayout: true,
+      tabSize: 2,
+      wordWrap: 'off',
+      smoothScrolling: true,
+      cursorBlinking: 'smooth',
+      cursorSmoothCaretAnimation: 'on',
+    }
+  );
+
+  // Foco en el editor derecho → marcar pane derecho como activo
+  state.editorRight.onDidFocusEditorWidget(() => {
+    state.activePaneRight = true;
+  });
+
+  // Posición del cursor → status bar (solo si el pane derecho tiene el foco)
+  state.editorRight.onDidChangeCursorPosition((e) => {
+    if (state.activePaneRight) {
+      document.getElementById('status-cursor').textContent =
+        `Ln ${e.position.lineNumber}, Col ${e.position.column}`;
+    }
+  });
+
+  // Cambios en contenido → marcar tab derecho como modificado + auto-save
+  state.editorRight.onDidChangeModelContent(() => {
+    if (state.activeTabRight && !state.activeTabRight.modified) {
+      state.activeTabRight.modified = true;
+      renderTabsRight();
+    }
+    if (state.autoSave && state.activeTabRight?.model) {
+      clearTimeout(state.autoSaveTimer);
+      state.autoSaveTimer = setTimeout(() => saveCurrentFile(), 1000);
+    }
+  });
+
+  // Cmd+S en el editor derecho → guardar archivo del pane derecho
+  state.editorRight.addCommand(
+    monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS,
+    () => saveCurrentFile()
+  );
+
+  // Cmd+W en el editor derecho → cerrar tab activo del pane derecho
+  state.editorRight.addCommand(
+    monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyW,
+    () => { if (state.activeTabRight) closeTabRight(state.activeTabRight.path); }
+  );
+}
+
+/**
+ * Activa un tab en el pane derecho: carga el model en el editor derecho,
+ * muestra el container, y actualiza el breadcrumb derecho.
+ *
+ * @param {object} tab - { path, name, model, modified }
+ */
+function activateTabRight(tab) {
+  state.activeTabRight = tab;
+  state.activePaneRight = true;
+
+  document.getElementById('welcome-right').style.display = 'none';
+  document.getElementById('editor-container-right').style.display = 'block';
+
+  state.editorRight.setModel(tab.model);
+  state.editorRight.focus();
+
+  renderTabsRight();
+  updateBreadcrumbRight();
+}
+
+/**
+ * Renderiza los tabs en el tab bar del pane derecho (#tab-bar-right).
+ * Mismo patrón que renderTabs() pero para la lista openTabsRight.
+ */
+function renderTabsRight() {
+  const bar = document.getElementById('tab-bar-right');
+  const existingEls = Array.from(bar.children);
+  const tabCount = state.openTabsRight.length;
+
+  while (existingEls.length > tabCount) {
+    existingEls.pop().remove();
+  }
+
+  state.openTabsRight.forEach((tab, i) => {
+    let el = existingEls[i];
+    const isActive = state.activeTabRight === tab;
+    const label = `${tab.modified ? '● ' : ''}${tab.name}`;
+
+    if (!el) {
+      el = document.createElement('div');
+      el.addEventListener('click', (e) => {
+        if (e.target.classList.contains('tab-close')) {
+          closeTabRight(e.target.dataset.path);
+        } else {
+          const t = state.openTabsRight.find((t) => t.path === el.dataset.tabPath);
+          if (t) activateTabRight(t);
+        }
+      });
+      bar.appendChild(el);
+    }
+
+    el.dataset.tabPath = tab.path;
+    el.className = `tab ${isActive ? 'active' : ''}`;
+    const nameSpan = el.querySelector('.tab-name');
+    if (!nameSpan || nameSpan.textContent !== label || el.querySelector('.tab-close')?.dataset.path !== tab.path) {
+      el.innerHTML = `
+        <span class="tab-name">${label}</span>
+        <span class="tab-close" data-path="${tab.path}">✕</span>`;
+    }
+  });
+}
+
+/**
+ * Cierra un tab del pane derecho.
+ *
+ * IMPORTANTE: No destruye el Monaco TextModel — el mismo model puede
+ * estar abierto simultáneamente en el pane izquierdo. Solo remueve
+ * la referencia de openTabsRight.
+ *
+ * @param {string} tabPath - Path del tab a cerrar
+ */
+function closeTabRight(tabPath) {
+  const idx = state.openTabsRight.findIndex((t) => t.path === tabPath);
+  if (idx === -1) return;
+
+  const tab = state.openTabsRight[idx];
+  if (tab.modified && tab.model) {
+    const save = confirm(`"${tab.name}" has unsaved changes. Close without saving?`);
+    if (!save) return;
+  }
+
+  state.openTabsRight.splice(idx, 1);
+
+  if (state.activeTabRight?.path === tabPath) {
+    const next = state.openTabsRight[idx < state.openTabsRight.length ? idx : idx - 1];
+    if (next) {
+      activateTabRight(next);
+    } else {
+      state.activeTabRight = null;
+      if (state.editorRight) state.editorRight.setModel(null);
+      document.getElementById('editor-container-right').style.display = 'none';
+      document.getElementById('welcome-right').style.display = 'flex';
+      document.getElementById('breadcrumb-bar-right').style.display = 'none';
+    }
+  }
+
+  renderTabsRight();
+}
+
+/**
+ * Abre un archivo en el pane derecho. Si ya está en openTabsRight lo reactiva.
+ * Si el mismo archivo está abierto en el pane izquierdo, reutiliza su model
+ * para evitar leer el archivo dos veces y mantener el estado de undo/redo sincronizado.
+ *
+ * @param {string} filePath
+ * @param {string} [fileName]
+ */
+async function openFileInRightPane(filePath, fileName) {
+  const existing = state.openTabsRight.find((t) => t.path === filePath);
+  if (existing) { activateTabRight(existing); return; }
+
+  // Reusar model del pane izquierdo si el archivo ya está abierto allá
+  const leftTab = state.openTabs.find((t) => t.path === filePath);
+  let model, language;
+
+  if (leftTab) {
+    model    = leftTab.model;
+    language = leftTab.language;
+  } else {
+    const result = await window.api.readFile(filePath);
+    if (result.error) { console.error('Error reading file:', result.error); return; }
+    const ext = filePath.split('.').pop();
+    language  = getMonacoLanguage(ext);
+    const uri = monaco.Uri.file(filePath);
+    model     = monaco.editor.getModel(uri) || monaco.editor.createModel(result.content, language, uri);
+  }
+
+  const tab = {
+    path: filePath,
+    name: fileName || filePath.split(/[/\\]/).pop(),
+    model,
+    language,
+    modified: false,
+  };
+
+  state.openTabsRight.push(tab);
+  activateTabRight(tab);
+}
+
+/**
+ * Actualiza el breadcrumb del pane derecho con la ruta relativa del tab activo.
+ */
+function updateBreadcrumbRight() {
+  const bar = document.getElementById('breadcrumb-bar-right');
+  const tab = state.activeTabRight;
+  if (!tab || !tab.path || tab.path.startsWith('__')) {
+    bar.style.display = 'none';
+    return;
+  }
+  let displayPath = tab.path;
+  if (state.currentFolder && displayPath.startsWith(state.currentFolder)) {
+    displayPath = displayPath.slice(state.currentFolder.length + 1);
+  }
+  const parts = displayPath.split('/');
+  bar.style.display = 'flex';
+  bar.innerHTML = parts.map((p, i) =>
+    `${i > 0 ? '<span class="breadcrumb-sep">/</span>' : ''}<span class="breadcrumb-part">${escapeHtml(p)}</span>`
+  ).join('');
+}
+
+/**
+ * Habilita el split: muestra el pane derecho, crea el editor derecho (lazy),
+ * inicializa el resizer, y abre en el pane derecho el archivo activo del izquierdo
+ * como punto de partida natural.
+ */
+function enableSplit() {
+  state.split = true;
+  ensureRightEditor();
+
+  document.getElementById('pane-right').style.display = 'flex';
+  document.getElementById('split-resizer').style.display = 'block';
+
+  // Abrir el archivo activo del pane izquierdo en el pane derecho
+  if (state.activeTab && !state.activeTab.path.startsWith('__')) {
+    openFileInRightPane(state.activeTab.path, state.activeTab.name);
+  }
+
+  // Sincronizar zoom con el editor izquierdo
+  if (state.editorRight) {
+    state.editorRight.updateOptions({ fontSize: state.zoom.fontSize });
+  }
+}
+
+/**
+ * Deshabilita el split: cierra los tabs del pane derecho, oculta el pane
+ * y el resizer, y devuelve el foco al editor izquierdo.
+ */
+function disableSplit() {
+  state.split = false;
+  state.activePaneRight = false;
+  state.openTabsRight = [];
+  state.activeTabRight = null;
+
+  if (state.editorRight) state.editorRight.setModel(null);
+  document.getElementById('pane-right').style.display = 'none';
+  document.getElementById('split-resizer').style.display = 'none';
+  document.getElementById('editor-container-right').style.display = 'none';
+  document.getElementById('welcome-right').style.display = 'flex';
+  document.getElementById('breadcrumb-bar-right').style.display = 'none';
+  renderTabsRight();
+
+  // Restaurar ancho del pane izquierdo (limpia el flex-basis fijado por el resizer)
+  const paneLeft = document.getElementById('pane-left');
+  paneLeft.style.flex = '';
+  paneLeft.style.width = '';
+
+  if (state.editor && state.activeTab && !state.activeTab.path.startsWith('__')) {
+    state.editor.focus();
+  }
+}
+
+/**
+ * Inicializa el resizer de split. El usuario puede arrastrar el div
+ * #split-resizer para ajustar el ancho relativo de los dos panes.
+ * El pane izquierdo recibe un ancho fijo en px y el derecho ocupa el resto.
+ */
+function initSplitResizer() {
+  const resizer  = document.getElementById('split-resizer');
+  const paneLeft = document.getElementById('pane-left');
+
+  let isDragging = false;
+  let startX     = 0;
+  let startW     = 0;
+
+  resizer.addEventListener('mousedown', (e) => {
+    isDragging = true;
+    startX     = e.clientX;
+    startW     = paneLeft.getBoundingClientRect().width;
+    resizer.classList.add('dragging');
+    document.body.style.cursor     = 'col-resize';
+    document.body.style.userSelect = 'none';
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!isDragging) return;
+    const totalW   = resizer.parentElement.getBoundingClientRect().width - 4;
+    const newW     = Math.max(200, Math.min(startW + (e.clientX - startX), totalW - 200));
+    paneLeft.style.flex  = 'none';
+    paneLeft.style.width = `${newW}px`;
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (!isDragging) return;
+    isDragging = false;
+    resizer.classList.remove('dragging');
+    document.body.style.cursor     = '';
+    document.body.style.userSelect = '';
+  });
+}
+
+/**
+ * Inicializa el sistema de split editor: botones, atajos de teclado y resizer.
+ * Se llama una sola vez desde init().
+ */
+function initSplitEditor() {
+  document.getElementById('btn-split-editor').addEventListener('click', () => {
+    state.split ? disableSplit() : enableSplit();
+  });
+
+  document.getElementById('btn-close-split').addEventListener('click', () => disableSplit());
+
+  // Cmd+\ → toggle split
+  document.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === '\\') {
+      e.preventDefault();
+      state.split ? disableSplit() : enableSplit();
+    }
+  });
+
+  // Foco en el editor izquierdo → marcar pane izquierdo como activo
+  state.editor.onDidFocusEditorWidget(() => {
+    state.activePaneRight = false;
+  });
+
+  initSplitResizer();
+}
 
 // ┌──────────────────────────────────────────────────┐
 // │  5. FILE SAVE                                    │
@@ -1315,32 +1740,34 @@ function renderTabs() {
 // │  notifica al LSP del guardado.                   │
 // └──────────────────────────────────────────────────┘
 async function saveCurrentFile() {
-  if (!state.activeTab || !state.activeTab.model) return;
+  // Guardar el archivo del pane que tiene el foco (izquierdo o derecho)
+  const tab    = state.activePaneRight ? state.activeTabRight : state.activeTab;
+  const editor = state.activePaneRight ? state.editorRight    : state.editor;
+  if (!tab || !tab.model) return;
 
-  const content = state.activeTab.model.getValue();
-  const result = await window.api.writeFile(state.activeTab.path, content);
+  const content = tab.model.getValue();
+  const result  = await window.api.writeFile(tab.path, content);
 
   if (result.success) {
-    state.activeTab.modified = false;
-    renderTabs();
+    tab.modified = false;
+    state.activePaneRight ? renderTabsRight() : renderTabs();
+
     // Notificar al LSP del save
-    if (typeof lspDidSave === 'function' && state.activeTab.model) {
-      lspDidSave(state.activeTab.model.uri.toString(), content);
+    if (typeof lspDidSave === 'function' && tab.model) {
+      lspDidSave(tab.model.uri.toString(), content);
     }
 
     // Format on save para archivos PHP
-    if (state.formatOnSave && state.activeTab.language === 'php') {
-      const formatResult = await window.api.phpFormat(state.activeTab.path);
+    if (state.formatOnSave && tab.language === 'php') {
+      const formatResult = await window.api.phpFormat(tab.path);
       if (formatResult && !formatResult.error) {
-        // Re-leer el archivo formateado y actualizar el editor
-        const updated = await window.api.readFile(state.activeTab.path);
+        const updated = await window.api.readFile(tab.path);
         if (updated.content !== null && updated.content !== content) {
-          const position = state.editor.getPosition();
-          state.activeTab.model.setValue(updated.content);
-          // Restaurar posición del cursor
-          if (position) state.editor.setPosition(position);
-          state.activeTab.modified = false;
-          renderTabs();
+          const position = editor.getPosition();
+          tab.model.setValue(updated.content);
+          if (position) editor.setPosition(position);
+          tab.modified = false;
+          state.activePaneRight ? renderTabsRight() : renderTabs();
         }
       }
     }
@@ -2879,10 +3306,85 @@ function initEventListeners() {
     }
   });
   window.api.onAutoSaveChanged((enabled) => { state.autoSave = enabled; });
+
+  // Track project capabilities so command palette can show/hide context-sensitive commands
+  window.api.onProjectCapabilities((caps) => { state.projectCaps = caps; });
+
   window.api.onFolderOpened((path) => loadFileTree(path));
   window.api.onFileOpened((path) => {
     const name = path.split(/[/\\]/).pop();
     openFile(path, name);
+  });
+
+  // ── File Watcher: reaccionar a cambios externos ────────────────
+  //
+  // Cuando un archivo abierto cambia fuera del editor (git checkout,
+  // artisan, formatter externo, etc.):
+  //   • Si el tab NO tiene cambios sin guardar → recargar silenciosamente
+  //   • Si el tab SÍ tiene cambios → mostrar la barra de advertencia
+  //
+  // Se usa una cola simple: si varios archivos cambian al mismo tiempo
+  // se procesan en orden; la barra muestra uno a la vez.
+  const changedQueue = [];
+  let fileChangedBarActive = false;
+
+  const fileChangedBar    = document.getElementById('file-changed-bar');
+  const fileChangedMsg    = document.getElementById('file-changed-msg');
+  const fileChangedReload = document.getElementById('file-changed-reload');
+  const fileChangedKeep   = document.getElementById('file-changed-keep');
+
+  function processChangedQueue() {
+    if (fileChangedBarActive || changedQueue.length === 0) return;
+    const filePath = changedQueue.shift();
+
+    // Buscar el tab en ambos panes
+    const tab = state.openTabs.find((t) => t.path === filePath)
+             || state.openTabsRight.find((t) => t.path === filePath);
+    if (!tab) { processChangedQueue(); return; }
+
+    if (!tab.modified) {
+      // Sin cambios sin guardar → recargar silenciosamente
+      window.api.readFile(filePath).then((result) => {
+        if (result.content !== null && tab.model) {
+          tab.model.setValue(result.content);
+          tab.modified = false;
+          renderTabs();
+          renderTabsRight();
+        }
+        processChangedQueue();
+      });
+    } else {
+      // Tiene cambios → mostrar barra de advertencia
+      fileChangedBarActive = true;
+      const name = filePath.split(/[/\\]/).pop();
+      fileChangedMsg.textContent = `"${name}" changed on disk.`;
+      fileChangedBar.style.display = 'flex';
+
+      fileChangedReload.onclick = async () => {
+        fileChangedBar.style.display = 'none';
+        fileChangedBarActive = false;
+        const result = await window.api.readFile(filePath);
+        if (result.content !== null && tab.model) {
+          tab.model.setValue(result.content);
+          tab.modified = false;
+          renderTabs();
+          renderTabsRight();
+        }
+        processChangedQueue();
+      };
+
+      fileChangedKeep.onclick = () => {
+        fileChangedBar.style.display = 'none';
+        fileChangedBarActive = false;
+        processChangedQueue();
+      };
+    }
+  }
+
+  window.api.onFileChanged((filePath) => {
+    // Evitar duplicados en la cola
+    if (!changedQueue.includes(filePath)) changedQueue.push(filePath);
+    processChangedQueue();
   });
 
   // Keyboard shortcuts (complementan los del menú)
@@ -2890,7 +3392,7 @@ function initEventListeners() {
     const mod = e.ctrlKey || e.metaKey;
     if (mod && e.key === 'b') { e.preventDefault(); toggleSidebar(); }
     if (mod && e.key === '`') { e.preventDefault(); toggleTerminal(); }
-    if (mod && e.key === 'p') { e.preventDefault(); toggleQuickOpen(); }
+    if (mod && !e.shiftKey && e.key.toLowerCase() === 'p') { e.preventDefault(); toggleQuickOpen(); }
     if (mod && !e.shiftKey && e.key === 'f' && state.activeTab?.path === '__route-list__') {
       e.preventDefault();
       const rc = document.getElementById('route-list-container');
@@ -3907,6 +4409,443 @@ function initSymbolSearch() {
 
   // Menu event
   window.api.onMenuGoToSymbol(() => toggleSymbolSearch());
+}
+
+// ┌──────────────────────────────────────────────────┐
+// │  9a3. COMMAND PALETTE (Cmd+Shift+P)              │
+// │  Paleta de comandos al estilo VS Code. Muestra   │
+// │  todos los comandos disponibles con shortcuts,   │
+// │  filtrables por texto. Algunos comandos están    │
+// │  condicionados a las capacidades del proyecto    │
+// │  (hasArtisan, hasPhpUnit, etc.).                 │
+// └──────────────────────────────────────────────────┘
+
+/**
+ * Estado interno de la paleta de comandos.
+ * filtered: lista de items visibles después de filtrar (incluye separadores de categoría).
+ * commands: solo los comandos reales (sin separadores).
+ * selectedIndex: índice dentro de `filteredCommands` (solo comandos, no headers).
+ */
+const commandPalette = {
+  visible: false,
+  allCommands: [],     // Registro completo
+  filteredCommands: [], // Comandos que pasan el filtro actual
+  selectedIndex: 0,
+};
+
+/**
+ * Construye y devuelve la lista completa de comandos disponibles.
+ * Cada comando: { id, label, category, shortcut?, action }
+ * condition() — si devuelve false, el comando no se muestra.
+ */
+function buildCommandRegistry() {
+  return [
+    // ── File ───────────────────────────────────────────────────
+    {
+      id: 'file.openFolder',
+      label: 'Open Folder...',
+      category: 'File',
+      shortcut: '⌘O',
+      action: () => window.api.openFolder(),
+    },
+    {
+      id: 'file.save',
+      label: 'Save File',
+      category: 'File',
+      shortcut: '⌘S',
+      action: () => saveCurrentFile(),
+    },
+    {
+      id: 'file.saveAs',
+      label: 'Save As...',
+      category: 'File',
+      shortcut: '⌘⇧S',
+      action: async () => {
+        const tab = state.activePaneRight ? state.activeTabRight : state.activeTab;
+        if (!tab || !tab.model) return;
+        const newPath = await window.api.saveAs(tab.path);
+        if (newPath) {
+          await window.api.writeFile(newPath, tab.model.getValue());
+        }
+      },
+    },
+    {
+      id: 'file.closeTab',
+      label: 'Close Tab',
+      category: 'File',
+      shortcut: '⌘W',
+      action: () => {
+        const tab = state.activePaneRight ? state.activeTabRight : state.activeTab;
+        if (tab) closeTab(tab.path);
+      },
+    },
+
+    // ── View ───────────────────────────────────────────────────
+    {
+      id: 'view.toggleSidebar',
+      label: 'Toggle Sidebar',
+      category: 'View',
+      shortcut: '⌘B',
+      action: () => toggleSidebar(),
+    },
+    {
+      id: 'view.toggleTerminal',
+      label: 'Toggle Terminal',
+      category: 'View',
+      shortcut: '⌃`',
+      action: () => toggleTerminal(),
+    },
+    {
+      id: 'view.splitEditor',
+      label: 'Split Editor',
+      category: 'View',
+      shortcut: '⌘\\',
+      action: () => {
+        if (state.split) disableSplit(); else enableSplit();
+      },
+    },
+    {
+      id: 'view.toggleGit',
+      label: 'Toggle Git Panel',
+      category: 'View',
+      action: () => toggleGitPanel(),
+    },
+    {
+      id: 'view.toggleSearch',
+      label: 'Toggle Search Panel',
+      category: 'View',
+      action: () => toggleSearchPanel(),
+    },
+    {
+      id: 'view.zoomIn',
+      label: 'Zoom In',
+      category: 'View',
+      shortcut: '⌘+',
+      action: () => editorZoomIn(),
+    },
+    {
+      id: 'view.zoomOut',
+      label: 'Zoom Out',
+      category: 'View',
+      shortcut: '⌘-',
+      action: () => editorZoomOut(),
+    },
+    {
+      id: 'view.zoomReset',
+      label: 'Reset Zoom',
+      category: 'View',
+      action: () => editorZoomReset(),
+    },
+
+    // ── Go ─────────────────────────────────────────────────────
+    {
+      id: 'go.file',
+      label: 'Go to File...',
+      category: 'Go',
+      shortcut: '⌘P',
+      action: () => toggleQuickOpen(),
+    },
+    {
+      id: 'go.symbol',
+      label: 'Go to Symbol...',
+      category: 'Go',
+      shortcut: '⌘T',
+      action: () => toggleSymbolSearch(),
+    },
+
+    // ── Git ────────────────────────────────────────────────────
+    {
+      id: 'git.switchBranch',
+      label: 'Switch Branch...',
+      category: 'Git',
+      shortcut: '⌘⇧B',
+      action: () => showBranchPicker(),
+    },
+    {
+      id: 'git.pull',
+      label: 'Git Pull',
+      category: 'Git',
+      action: () => gitPull(),
+    },
+    {
+      id: 'git.push',
+      label: 'Git Push',
+      category: 'Git',
+      action: () => gitPush(),
+    },
+
+    // ── Theme ──────────────────────────────────────────────────
+    {
+      id: 'theme.dark',
+      label: 'Switch to Dark Theme',
+      category: 'Theme',
+      action: () => switchTheme('dark'),
+    },
+    {
+      id: 'theme.light',
+      label: 'Switch to Light Theme',
+      category: 'Theme',
+      action: () => switchTheme('light'),
+    },
+    {
+      id: 'theme.generate',
+      label: 'Generate Theme...',
+      category: 'Theme',
+      action: () => showThemeGenerator(),
+    },
+
+    // ── PHP / Laravel ──────────────────────────────────────────
+    {
+      id: 'php.formatFile',
+      label: 'Format File (Pint / PHP CS Fixer)',
+      category: 'PHP',
+      condition: () => state.projectCaps && state.projectCaps.hasPint,
+      action: async () => {
+        if (!state.activeTab || !state.activeTab.path) return;
+        await window.api.phpFormat(state.activeTab.path);
+      },
+    },
+    {
+      id: 'php.phpunitAll',
+      label: 'Run All Tests (PHPUnit)',
+      category: 'PHP',
+      condition: () => state.projectCaps && state.projectCaps.hasPhpUnit,
+      action: async () => {
+        showCommandOutput('Running: PHPUnit (all tests)', 'Executing...', null, 0);
+        const result = await window.api.phpunitRun([]);
+        showCommandOutput('$ vendor/bin/phpunit', result.output || '', result.error || '', result.code);
+      },
+    },
+    {
+      id: 'php.phpunitFile',
+      label: 'Run Tests in Current File (PHPUnit)',
+      category: 'PHP',
+      condition: () => state.projectCaps && state.projectCaps.hasPhpUnit,
+      action: async () => {
+        if (!state.activeTab || !state.activeTab.path || state.activeTab.path.startsWith('__')) {
+          alert('No PHP file is open');
+          return;
+        }
+        const filePath = state.activeTab.path;
+        const fileName = filePath.split(/[/\\]/).pop();
+        showCommandOutput(`Running: PHPUnit (${fileName})`, 'Executing...', null, 0);
+        const result = await window.api.phpunitRun([filePath]);
+        showCommandOutput(`$ vendor/bin/phpunit ${fileName}`, result.output || '', result.error || '', result.code);
+      },
+    },
+    {
+      id: 'laravel.dbViewer',
+      label: 'Open DB Viewer',
+      category: 'Laravel',
+      condition: () => state.projectCaps && state.projectCaps.hasArtisan,
+      action: () => openDbViewer(),
+    },
+    {
+      id: 'laravel.routeList',
+      label: 'Open Route List',
+      category: 'Laravel',
+      condition: () => state.projectCaps && state.projectCaps.hasArtisan,
+      action: () => openRouteList(),
+    },
+  ];
+}
+
+/**
+ * Fuzzy-ish filter: devuelve true si todas las palabras del query
+ * aparecen en el label o categoría del comando (case-insensitive).
+ */
+function commandMatchesQuery(cmd, query) {
+  const q = query.toLowerCase().trim();
+  if (!q) return true;
+  const haystack = (cmd.category + ' ' + cmd.label).toLowerCase();
+  return q.split(/\s+/).every((word) => haystack.includes(word));
+}
+
+/**
+ * Resalta las letras del query dentro del label del comando.
+ * Usa el mismo estilo mark que el quick-open (color acento, sin background).
+ */
+function highlightCommandLabel(label, query) {
+  if (!query.trim()) return escapeHtml(label);
+  const escaped = escapeHtml(label);
+  const words = query.trim().split(/\s+/).map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  if (!words.length) return escaped;
+  const re = new RegExp(`(${words.join('|')})`, 'gi');
+  return escaped.replace(re, '<mark>$1</mark>');
+}
+
+/**
+ * Dibuja la lista de resultados en el panel de la paleta.
+ * Agrupa por categoría e inserta separadores visuales.
+ */
+function renderCommandResults(query) {
+  const list = document.getElementById('command-palette-results');
+  if (!list) return;
+
+  // Filtrar y mantener orden del registro
+  const commands = commandPalette.allCommands.filter((cmd) => {
+    if (typeof cmd.condition === 'function' && !cmd.condition()) return false;
+    return commandMatchesQuery(cmd, query);
+  });
+
+  commandPalette.filteredCommands = commands;
+
+  if (!commands.length) {
+    list.innerHTML = '<div class="cp-empty">No commands match your search</div>';
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+  let lastCategory = null;
+
+  commands.forEach((cmd, idx) => {
+    // Insertar separador de categoría cuando cambia
+    if (cmd.category !== lastCategory) {
+      const header = document.createElement('div');
+      header.className = 'cp-category';
+      header.textContent = cmd.category;
+      fragment.appendChild(header);
+      lastCategory = cmd.category;
+    }
+
+    const item = document.createElement('div');
+    item.className = 'cp-item' + (idx === commandPalette.selectedIndex ? ' selected' : '');
+    item.dataset.index = idx;
+
+    const labelEl = document.createElement('span');
+    labelEl.className = 'cp-label';
+    labelEl.innerHTML = highlightCommandLabel(cmd.label, query);
+
+    item.appendChild(labelEl);
+
+    if (cmd.shortcut) {
+      const kbd = document.createElement('span');
+      kbd.className = 'cp-shortcut';
+      kbd.textContent = cmd.shortcut;
+      item.appendChild(kbd);
+    }
+
+    item.addEventListener('click', () => {
+      closeCommandPalette();
+      cmd.action();
+    });
+
+    fragment.appendChild(item);
+  });
+
+  list.innerHTML = '';
+  list.appendChild(fragment);
+}
+
+/**
+ * Sincroniza la clase CSS `selected` con el índice actual.
+ * También hace scroll para mantener el ítem seleccionado visible.
+ */
+function updateCommandPaletteSelection() {
+  const items = document.querySelectorAll('#command-palette-results .cp-item');
+  items.forEach((el, i) => {
+    el.classList.toggle('selected', i === commandPalette.selectedIndex);
+  });
+  // Scroll into view
+  if (items[commandPalette.selectedIndex]) {
+    items[commandPalette.selectedIndex].scrollIntoView({ block: 'nearest' });
+  }
+}
+
+/**
+ * Abre la paleta de comandos: reconstruye el registro (para reflejar
+ * el estado actual de projectCaps), limpia el input, renderiza la
+ * lista completa y mueve el foco al input.
+ */
+function openCommandPalette() {
+  commandPalette.allCommands = buildCommandRegistry();
+  commandPalette.selectedIndex = 0;
+  commandPalette.visible = true;
+
+  const overlay = document.getElementById('command-palette-overlay');
+  const input = document.getElementById('command-palette-input');
+  overlay.style.display = 'flex';
+  input.value = '';
+  renderCommandResults('');
+  input.focus();
+}
+
+/**
+ * Cierra la paleta de comandos y oculta el overlay.
+ */
+function closeCommandPalette() {
+  commandPalette.visible = false;
+  const overlay = document.getElementById('command-palette-overlay');
+  overlay.style.display = 'none';
+}
+
+/**
+ * Alterna la visibilidad de la paleta de comandos.
+ * Llamado por Cmd+Shift+P tanto desde el document listener como
+ * desde el addCommand de Monaco.
+ */
+function toggleCommandPalette() {
+  if (commandPalette.visible) {
+    closeCommandPalette();
+  } else {
+    openCommandPalette();
+  }
+}
+
+/**
+ * Inicializa la paleta de comandos: registra los listeners del input
+ * (filtro en tiempo real, navegación con flechas, Enter/Escape),
+ * el cierre al hacer click fuera, y el shortcut global Cmd+Shift+P.
+ * Se llama una sola vez desde init().
+ */
+function initCommandPalette() {
+  const input = document.getElementById('command-palette-input');
+  const overlay = document.getElementById('command-palette-overlay');
+
+  input.addEventListener('input', () => {
+    commandPalette.selectedIndex = 0;
+    renderCommandResults(input.value);
+  });
+
+  input.addEventListener('keydown', (e) => {
+    const total = commandPalette.filteredCommands.length;
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      closeCommandPalette();
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (commandPalette.selectedIndex < total - 1) {
+        commandPalette.selectedIndex++;
+        updateCommandPaletteSelection();
+      }
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (commandPalette.selectedIndex > 0) {
+        commandPalette.selectedIndex--;
+        updateCommandPaletteSelection();
+      }
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      const cmd = commandPalette.filteredCommands[commandPalette.selectedIndex];
+      if (cmd) {
+        closeCommandPalette();
+        cmd.action();
+      }
+    }
+  });
+
+  // Click outside the palette box closes it
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) closeCommandPalette();
+  });
+
+  // Global Cmd+Shift+P shortcut
+  document.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'p') {
+      e.preventDefault();
+      toggleCommandPalette();
+    }
+  });
 }
 
 // ┌──────────────────────────────────────────────────┐
@@ -6020,10 +6959,12 @@ function initClaudePanel() {
   initQuickOpen();
   initSearchPanel();
   initSymbolSearch();
+  initCommandPalette();
   initComposerArtisan();
   initPhpTools();
   initDbAndRoutes();
   initClaudePanel();
+  initSplitEditor();
   initTreeContextMenu();
   initSidebarResize();
   renderRecentFolders(); // Mostrar carpetas recientes en la welcome screen

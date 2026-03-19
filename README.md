@@ -244,12 +244,14 @@ A sidebar panel (lightbulb icon in the action bar) that reads the project's `.cl
 |---|---|
 | `Cmd+O` | Open folder |
 | `Cmd+Shift+O` | Open file |
+| `Cmd+Shift+P` | Command Palette |
 | `Cmd+P` | Quick Open (fuzzy file search) |
 | `Cmd+T` | Go to Symbol (fuzzy symbol search) |
 | `Cmd+Shift+F` | Search in Files |
 | `Cmd+S` | Save file |
 | `Cmd+Shift+S` | Save As |
 | `Cmd+W` | Close active tab |
+| `Cmd+\` | Toggle Split Editor |
 | `Cmd+Shift+B` | Switch Git branch |
 | `Cmd+B` | Toggle sidebar |
 | `Cmd+`` ` | Toggle terminal |
@@ -385,9 +387,8 @@ No additional runtime dependencies for database access (uses `mysql`/`psql` CLI)
 ## Known Limitations
 
 - LSP only supports PHP (Intelephense). Other languages get syntax highlighting but no autocomplete or diagnostics
-- No file watcher — external file changes aren't detected until the file is reopened
 - No settings UI — tab size and other preferences are hardcoded (font size is adjustable via zoom)
-- Database viewer requires `mysql` or `psql` CLI installed locally
+- Database viewer requires `mysql`, `psql`, or `sqlite3` CLI installed locally
 - No Xdebug integration (breakpoints/debugging)
 
 ---
@@ -397,9 +398,19 @@ No additional runtime dependencies for database access (uses `mysql`/`psql` CLI)
 ### Planned
 - [ ] Xdebug integration (breakpoints and step debugging)
 - [ ] `.env` viewer with syntax highlighting and hidden secrets
-- [ ] File watcher for external changes
 - [ ] Settings/preferences UI
 - [ ] Multiple terminal instances
+
+---
+
+## Changelog
+
+### v2.5.0
+
+- **Command Palette** — `Cmd+Shift+P` opens a searchable list of all editor commands grouped by category (File, View, Go, Git, Theme, PHP, Laravel). PHP and Laravel commands appear only when the project has the relevant tools detected (PHPUnit, Artisan, Pint).
+- **Split Editor** — `Cmd+\` splits the editor into two independent panes. Each pane has its own tab bar, breadcrumb, and Monaco instance. Files shared across panes use the same TextModel, keeping edits and undo history in sync.
+- **File Watcher** — Detects external changes to open files (git checkout, artisan generators, external formatters). Silently reloads if the file has no unsaved changes; shows a warning bar if there are conflicts.
+- **SQLite Support in DB Viewer** — The database viewer now supports SQLite connections defined in `.env` (`DB_CONNECTION=sqlite`). Uses the `sqlite3` CLI (pre-installed on macOS) — no additional dependencies required.
 
 ---
 

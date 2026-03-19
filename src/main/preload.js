@@ -45,6 +45,12 @@ contextBridge.exposeInMainWorld('api', {
   writeFile: (filePath, content) => ipcRenderer.invoke('fs:writeFile', filePath, content),
   stat: (filePath) => ipcRenderer.invoke('fs:stat', filePath),
 
+  // ── File Watcher ──
+  watchAdd: (filePath) => ipcRenderer.invoke('watch:add', filePath),
+  watchRemove: (filePath) => ipcRenderer.invoke('watch:remove', filePath),
+  watchClear: () => ipcRenderer.invoke('watch:clear'),
+  onFileChanged: (callback) => ipcRenderer.on('file:changed', (event, path) => callback(path)),
+
   // ── File operations (context menu del file tree) ──
   deleteFile: (targetPath) => ipcRenderer.invoke('fs:deleteFile', targetPath),
   copyFile: (srcPath, destPath) => ipcRenderer.invoke('fs:copyFile', srcPath, destPath),

@@ -976,18 +976,146 @@ body {
 #editor-area {
   flex: 1;
   display: flex;
+  flex-direction: row; /* fila: pane-left | resizer | pane-right */
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* ════════════════════════════════════════════════════════════
+   SPLIT EDITOR — panes, resizer, tab bars secundarios
+   ════════════════════════════════════════════════════════════ */
+
+/* Pane izquierdo: ocupa todo el ancho por defecto,
+   se comparte con el derecho cuando el split está activo */
+#pane-left {
+  flex: 1;
+  display: flex;
   flex-direction: column;
   min-width: 0;
   overflow: hidden;
 }
 
+/* Pane derecho: oculto por defecto.
+   position: relative es necesario para el overlay de drag-and-drop */
+#pane-right {
+  flex: 1;
+  display: none;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  border-left: 1px solid var(--border);
+  position: relative;
+}
+
+/* Overlay transparente que se activa durante un drag desde el pane izquierdo.
+   Se posiciona encima de Monaco para capturar los eventos que Monaco absorbería. */
+#split-drop-overlay {
+  display: none;
+  position: absolute;
+  inset: 0;
+  z-index: 100;
+  background: transparent;
+}
+
+/* Feedback visual cuando el tab está sobre el overlay listo para soltar */
+#pane-right.split-drop-target {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* Resizer arrastrable entre panes: oculto por defecto */
+#split-resizer {
+  width: 4px;
+  background: var(--border);
+  cursor: col-resize;
+  flex-shrink: 0;
+  display: none;
+  transition: background 0.15s;
+}
+#split-resizer:hover,
+#split-resizer.dragging { background: var(--accent); }
+
+/* Tab bar wrapper — contiene el tab-bar y el botón de acción (split/close) */
+#tab-bar-wrapper,
+#tab-bar-wrapper-right {
+  display: flex;
+  align-items: stretch;
+  background: var(--bg-dark);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  height: 36px;
+}
+
+/* Botón de acción en la tab bar (split / cerrar split) */
+.tab-bar-action-btn {
+  width: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  border-left: 1px solid var(--border);
+  transition: color 0.15s, background 0.15s;
+}
+.tab-bar-action-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+/* Tab bar del pane derecho */
+#tab-bar-right {
+  display: flex;
+  align-items: stretch;
+  overflow-x: auto;
+  flex: 1;
+  min-width: 0;
+}
+#tab-bar-right::-webkit-scrollbar { height: 0; }
+
+/* Breadcrumb bar del pane derecho (mismo estilo que el izquierdo) */
+#breadcrumb-bar-right {
+  display: none;
+  align-items: center;
+  padding: 4px 14px;
+  background: var(--bg-tab-active);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  gap: 0;
+}
+
+/* Monaco container del pane derecho */
+#editor-container-right {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+  display: none;
+}
+
+/* Welcome del pane derecho */
+#welcome-right {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+
 /* ─── TAB BAR ─── */
 #tab-bar {
-  height: 36px;
+  flex: 1;
+  min-width: 0;
   background: var(--bg-dark);
   display: flex;
   align-items: stretch;
-  border-bottom: 1px solid var(--border);
   overflow-x: auto;
   flex-shrink: 0;
 }
@@ -1054,6 +1182,43 @@ body {
 .tab-dragging { opacity: 0.4; }
 .tab-drop-before { box-shadow: inset 2px 0 0 var(--accent); }
 .tab-drop-after  { box-shadow: inset -2px 0 0 var(--accent); }
+
+/* ─── FILE CHANGED BAR ─── */
+/* Aparece cuando un archivo abierto fue modificado externamente mientras
+   tiene cambios sin guardar. El fondo amarillo es una señal de advertencia
+   clara sin ser intrusiva (mismo patrón que VS Code). */
+#file-changed-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 14px;
+  background: #7a5c00;
+  color: #ffd970;
+  font-size: 11px;
+  flex-shrink: 0;
+  gap: 10px;
+}
+
+.file-changed-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.file-changed-actions button {
+  background: rgba(255,255,255,0.12);
+  border: 1px solid rgba(255,255,255,0.2);
+  color: #ffd970;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.file-changed-actions button:hover {
+  background: rgba(255,255,255,0.22);
+}
 
 /* ─── BREADCRUMB BAR ─── */
 #breadcrumb-bar {
@@ -1433,6 +1598,122 @@ body {
 }
 
 .qo-empty {
+  padding: 20px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+/* ─── COMMAND PALETTE ─── */
+#command-palette-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0,0,0,0.4);
+  z-index: 2000;
+  display: flex;
+  justify-content: center;
+  padding-top: 80px;
+}
+
+#command-palette {
+  width: 580px;
+  max-height: 440px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  align-self: flex-start;
+}
+
+#command-palette-header {
+  border-bottom: 1px solid var(--border);
+}
+
+#command-palette-input {
+  width: 100%;
+  padding: 10px 14px;
+  background: var(--bg-dark);
+  border: none;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  outline: none;
+  box-sizing: border-box;
+}
+
+#command-palette-input::placeholder {
+  color: var(--text-muted);
+}
+
+#command-palette-results {
+  overflow-y: auto;
+  max-height: 380px;
+}
+
+/* Category header row */
+.cp-category {
+  padding: 4px 14px 2px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  background: var(--bg-dark);
+  border-top: 1px solid var(--border);
+}
+
+.cp-category:first-child {
+  border-top: none;
+}
+
+/* Individual command row */
+.cp-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.cp-item:hover,
+.cp-item.selected {
+  background: var(--bg-hover);
+}
+
+.cp-item.selected {
+  background: var(--bg-active);
+}
+
+.cp-label {
+  flex: 1;
+  color: var(--text-primary);
+}
+
+.cp-label mark {
+  background: none;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.cp-shortcut {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  background: var(--bg-dark);
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.cp-empty {
   padding: 20px;
   text-align: center;
   color: var(--text-muted);

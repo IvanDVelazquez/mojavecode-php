@@ -39,9 +39,15 @@ function parseEnvFile(folderPath) {
 
 /**
  * Extrae la config de conexión de un .env parseado.
+ *
+ * Para SQLite devuelve { connection: 'sqlite', filePath } en lugar de
+ * host/port/user/password — el archivo es toda la "conexión".
  */
 function getConnectionConfig(env) {
   const conn = env.DB_CONNECTION || 'mysql';
+  if (conn === 'sqlite') {
+    return { connection: 'sqlite', filePath: env.DB_DATABASE || '' };
+  }
   return {
     connection: conn,
     host: env.DB_HOST || '127.0.0.1',
@@ -97,6 +103,17 @@ function getAllConnectionConfigs(env) {
 
     // Buscar credenciales específicas para esta conexión, fallback a defaults
     const conn = env[`${prefix}_CONNECTION`] || defaults.connection;
+
+    // ── SQLite: solo necesita el path del archivo ─────────────────
+    if (conn === 'sqlite') {
+      connections.push({
+        key: label,
+        label: label === 'default' ? database : `${label} (${database})`,
+        config: { connection: 'sqlite', filePath: database },
+      });
+      continue;
+    }
+
     connections.push({
       key: label,
       label: label === 'default' ? database : `${label} (${database})`,
@@ -124,11 +141,41 @@ function getAllConnectionConfigs(env) {
 }
 
 /**
- * Ejecuta un comando mysql/psql y devuelve una Promise con el resultado.
+ * Ejecuta un query SQL contra la base de datos configurada.
+ *
+ * Soporta tres motores: MySQL (default), PostgreSQL (pgsql) y SQLite.
+ * SQLite no necesita CLI externa en macOS — sqlite3 viene preinstalado.
+ *
+ * DIFERENCIAS SQLITE:
+ * ───────────────────
+ * • No tiene host/port/user — solo un archivo .db/.sqlite
+ * • Modo CSV:    sqlite3 -csv archivo.db "SQL"
+ * • Modo normal: sqlite3 -separator "\t" archivo.db "SQL"  (tab-delimitado,
+ *   igual que MySQL -N, para que el parser del renderer no cambie)
+ * • No acepta backticks — usar comillas dobles para identificadores
+ *
+ * @param {object} dbConfig - Config de conexión ({ connection, filePath } para SQLite)
+ * @param {string} sql      - Query a ejecutar
+ * @param {object} options  - { csv: bool }
+ * @returns {Promise<{ output?: string, error?: string }>}
  */
 function execDb(dbConfig, sql, options = {}) {
   const { csv = false } = options;
   const timeout = config.db.timeout;
+
+  // ── SQLite ────────────────────────────────────────────────────
+  if (dbConfig.connection === 'sqlite') {
+    const args = csv
+      ? ['-csv', dbConfig.filePath, sql]
+      : ['-separator', '\t', dbConfig.filePath, sql];
+
+    return new Promise((resolve) => {
+      execFile('sqlite3', args, { timeout }, (err, stdout, stderr) => {
+        if (err) return resolve({ error: stderr || err.message });
+        resolve({ output: stdout.trim() });
+      });
+    });
+  }
 
   if (dbConfig.connection === 'pgsql') {
     const pgEnv = { ...process.env, PGPASSWORD: dbConfig.password };

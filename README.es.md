@@ -260,12 +260,14 @@ Panel en el sidebar (icono de bombilla en la barra de acciones) que lee el direc
 |---|---|
 | `Cmd+O` | Abrir carpeta |
 | `Cmd+Shift+O` | Abrir archivo |
+| `Cmd+Shift+P` | Paleta de comandos |
 | `Cmd+P` | Apertura rapida (busqueda fuzzy de archivos) |
 | `Cmd+T` | Ir a simbolo (busqueda fuzzy de simbolos) |
 | `Cmd+Shift+F` | Buscar en archivos |
 | `Cmd+S` | Guardar archivo |
 | `Cmd+Shift+S` | Guardar como |
 | `Cmd+W` | Cerrar pestana activa |
+| `Cmd+\` | Toggle editor dividido |
 | `Cmd+Shift+B` | Cambiar rama de Git |
 | `Cmd+B` | Mostrar/ocultar sidebar |
 | `Cmd+`` ` | Mostrar/ocultar terminal |
@@ -402,9 +404,8 @@ Sin dependencias adicionales de runtime para acceso a base de datos (usa CLI de 
 ## Limitaciones conocidas
 
 - El LSP solo soporta PHP (Intelephense). Otros lenguajes tienen resaltado de sintaxis pero no autocompletado ni diagnosticos
-- Sin file watcher — los cambios externos de archivos no se detectan hasta que el archivo se reabre
 - Sin UI de configuracion — el tamano de tabulacion y otras preferencias estan hardcodeadas (el tamano de fuente es ajustable via zoom)
-- El visor de base de datos requiere que `mysql` o `psql` CLI esten instalados localmente
+- El visor de base de datos requiere que `mysql`, `psql` o `sqlite3` CLI esten instalados localmente
 - Sin integracion con Xdebug (breakpoints/debugging)
 
 ---
@@ -414,9 +415,19 @@ Sin dependencias adicionales de runtime para acceso a base de datos (usa CLI de 
 ### Planificado
 - [ ] Integracion con Xdebug (breakpoints y debugging paso a paso)
 - [ ] Visor de `.env` con resaltado de sintaxis y secretos ocultos
-- [ ] File watcher para cambios externos
 - [ ] UI de configuracion/preferencias
 - [ ] Multiples instancias de terminal
+
+---
+
+## Changelog
+
+### v2.5.0
+
+- **Paleta de comandos** — `Cmd+Shift+P` abre un buscador de todos los comandos del editor, agrupados por categoria (File, View, Go, Git, Theme, PHP, Laravel). Los comandos de PHP y Laravel solo aparecen cuando el proyecto tiene las herramientas correspondientes detectadas (PHPUnit, Artisan, Pint).
+- **Editor dividido** — `Cmd+\` divide el editor en dos paneles independientes. Cada panel tiene su propia barra de pestanas, breadcrumb e instancia de Monaco. Los archivos compartidos entre paneles usan el mismo TextModel, manteniendo ediciones e historial de undo sincronizados.
+- **File Watcher** — Detecta cambios externos en los archivos abiertos (git checkout, generadores de artisan, formatters externos). Recarga silenciosamente si el archivo no tiene cambios sin guardar; muestra una barra de advertencia si hay conflictos.
+- **SQLite en DB Viewer** — El visor de base de datos ahora soporta conexiones SQLite definidas en `.env` (`DB_CONNECTION=sqlite`). Usa el CLI `sqlite3` (preinstalado en macOS) — sin dependencias adicionales.
 
 ---
 
