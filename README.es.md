@@ -422,6 +422,10 @@ Sin dependencias adicionales de runtime para acceso a base de datos (usa CLI de 
 
 ## Changelog
 
+### v2.7.3
+
+- **Git Blame Inline** — Muestra autor, fecha relativa y mensaje del commit al final de la línea actual como una decoración sutil en itálica. Se actualiza con debounce de 300ms al mover el cursor. También muestra la info completa de blame en la barra de estado inferior.
+
 ### v2.7.2
 
 - **Editor visual de .env** — Abrir un archivo `.env` muestra un panel tipo formulario con variables agrupadas por prefijo (APP, DB, MAIL, CACHE, etc.). La edición inline guarda los cambios directo al archivo. Grupo APP siempre primero, OTHER siempre al final.

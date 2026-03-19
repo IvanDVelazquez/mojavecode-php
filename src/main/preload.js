@@ -134,6 +134,9 @@ contextBridge.exposeInMainWorld('api', {
   gitListBranches: (cwd) => ipcRenderer.invoke('git:listBranches', cwd),
   gitCheckout: (cwd, branch) => ipcRenderer.invoke('git:checkout', cwd, branch),
 
+  // ── Git Blame ──
+  gitBlame: (cwd, filePath, line) => ipcRenderer.invoke('git:blame', cwd, filePath, line),
+
   // ── Git Conflict Resolution ──
   gitConflictContent: (cwd, filePath, side) => ipcRenderer.invoke('git:conflictContent', cwd, filePath, side),
   gitConflictResolve: (cwd, filePath, content) => ipcRenderer.invoke('git:conflictResolve', cwd, filePath, content),

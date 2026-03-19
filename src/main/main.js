@@ -606,7 +606,7 @@ function createMenu() {
             dialog.showMessageBox(mainWindow, {
               type: 'info',
               title: 'MojaveCode PHP',
-              message: 'MojaveCode PHP v2.7.2',
+              message: 'MojaveCode PHP v2.7.3',
               detail: 'A lightweight code editor by MojaveWare.\nBuilt with Electron + Monaco + xterm.js',
             });
           },
@@ -1469,6 +1469,54 @@ ipcMain.handle('git:checkout', async (event, cwd, branch) => {
 // git pull
 ipcMain.handle('git:pull', async (event, cwd) => {
   return runGit(['pull'], cwd);
+});
+
+// ── Git Blame ────────────────────────────────────────────────
+
+/**
+ * Obtener la info de blame para una línea específica de un archivo.
+ *
+ * Usa git blame --porcelain -L line,line para obtener autor, fecha
+ * y mensaje del commit que modificó esa línea por última vez.
+ * Devuelve { author, date, hash, shortHash, summary } o error.
+ */
+ipcMain.handle('git:blame', async (event, cwd, filePath, line) => {
+  const result = await runGit(
+    ['blame', '--porcelain', `-L${line},${line}`, '--', filePath],
+    cwd
+  );
+  if (result.error) return { error: result.error };
+  if (!result.output) return { error: 'No blame data' };
+
+  const lines = result.output.split('\n');
+  const hash = lines[0]?.split(' ')[0] || '';
+
+  // Archivo no commiteado (todo ceros)
+  if (/^0+$/.test(hash)) {
+    return { author: 'Not Committed Yet', date: '', hash: '', shortHash: '', summary: 'Uncommitted change' };
+  }
+
+  let author = '', authorTime = '', summary = '';
+  for (const l of lines) {
+    if (l.startsWith('author ')) author = l.substring(7);
+    else if (l.startsWith('author-time ')) authorTime = l.substring(12);
+    else if (l.startsWith('summary ')) summary = l.substring(8);
+  }
+
+  // Convertir timestamp a fecha relativa
+  const ts = parseInt(authorTime, 10);
+  let date = '';
+  if (ts) {
+    const diff = Math.floor((Date.now() / 1000) - ts);
+    if (diff < 60) date = 'just now';
+    else if (diff < 3600) date = `${Math.floor(diff / 60)} min ago`;
+    else if (diff < 86400) date = `${Math.floor(diff / 3600)} hours ago`;
+    else if (diff < 2592000) date = `${Math.floor(diff / 86400)} days ago`;
+    else if (diff < 31536000) date = `${Math.floor(diff / 2592000)} months ago`;
+    else date = `${Math.floor(diff / 31536000)} years ago`;
+  }
+
+  return { author, date, hash, shortHash: hash.substring(0, 7), summary };
 });
 
 // ── Git Merge Conflict Resolution ────────────────────────────

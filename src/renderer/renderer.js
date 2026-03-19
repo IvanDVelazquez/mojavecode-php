@@ -167,10 +167,11 @@ function initEditor() {
     }
   );
 
-  // Escuchar cambios de posición del cursor → actualizar status bar
+  // Escuchar cambios de posición del cursor → actualizar status bar + blame
   state.editor.onDidChangeCursorPosition((e) => {
     document.getElementById('status-cursor').textContent =
       `Ln ${e.position.lineNumber}, Col ${e.position.column}`;
+    scheduleBlameUpdate(e.position.lineNumber);
   });
 
   // Escuchar cambios en el contenido → marcar tab como modified + actualizar outline + model highlights
@@ -318,7 +319,104 @@ function updateZoomIndicator() {
 }
 
 // ┌──────────────────────────────────────────────────┐
-// │  1b. GIT BRANCH AUTO-REFRESH                     │
+// │  1b. GIT BLAME INLINE                            │
+// │  Muestra autor, fecha y mensaje del commit que   │
+// │  modificó la línea actual. Se actualiza con      │
+// │  debounce al mover el cursor. La info aparece    │
+// │  como decoración sutil al final de la línea y    │
+// │  también en el status bar inferior.              │
+// └──────────────────────────────────────────────────┘
+let _blameTimer = null;
+let _blameDecorations = [];
+let _lastBlameLine = -1;
+
+/**
+ * Programa una actualización de blame con debounce de 300ms.
+ * Evita llamar a git blame en cada movimiento de cursor.
+ *
+ * @param {number} lineNumber - Línea actual del cursor
+ */
+function scheduleBlameUpdate(lineNumber) {
+  if (_blameTimer) clearTimeout(_blameTimer);
+  if (lineNumber === _lastBlameLine) return;
+  _blameTimer = setTimeout(() => fetchBlame(lineNumber), 300);
+}
+
+/**
+ * Obtiene la info de blame para una línea y la muestra como
+ * decoración inline (after text) y en el status bar.
+ *
+ * Solo funciona con archivos reales de un repo git (no tabs
+ * especiales como terminal, diff, etc.).
+ *
+ * @param {number} lineNumber - Línea para la que obtener blame
+ */
+async function fetchBlame(lineNumber) {
+  const tab = state.activeTab;
+  const blameEl = document.getElementById('status-blame');
+
+  // Solo para archivos reales en un repo git
+  if (!tab || !state.currentFolder || tab.path.startsWith('__')) {
+    clearBlame();
+    return;
+  }
+
+  // Obtener path relativo al repo
+  const repoRoot = state.gitRepoRoot || state.currentFolder;
+  let relativePath = tab.path;
+  if (tab.path.startsWith(repoRoot)) {
+    relativePath = tab.path.substring(repoRoot.length).replace(/^[/\\]/, '');
+  }
+
+  const result = await window.api.gitBlame(state.currentFolder, relativePath, lineNumber);
+
+  // Verificar que el cursor no se movió mientras esperábamos la respuesta
+  const currentLine = state.editor.getPosition()?.lineNumber;
+  if (currentLine !== lineNumber) return;
+
+  if (result.error || !result.author) {
+    clearBlame();
+    return;
+  }
+
+  _lastBlameLine = lineNumber;
+
+  // ── Decoración inline (after text, sutil) ──────────────────
+  const blameText = `${result.author}, ${result.date} — ${result.summary}`;
+  _blameDecorations = state.editor.deltaDecorations(_blameDecorations, [
+    {
+      range: new monaco.Range(lineNumber, 1, lineNumber, 1),
+      options: {
+        after: {
+          content: `    ${blameText}`,
+          inlineClassName: 'blame-inline-decoration',
+        },
+        isWholeLine: true,
+      },
+    },
+  ]);
+
+  // ── Status bar ─────────────────────────────────────────────
+  if (blameEl) {
+    blameEl.textContent = `${result.shortHash} ${result.author}, ${result.date} — ${result.summary}`;
+    blameEl.title = `${result.hash}\n${result.author}, ${result.date}\n${result.summary}`;
+  }
+}
+
+/**
+ * Limpia la decoración de blame y el status bar.
+ */
+function clearBlame() {
+  _lastBlameLine = -1;
+  if (state.editor && _blameDecorations.length) {
+    _blameDecorations = state.editor.deltaDecorations(_blameDecorations, []);
+  }
+  const blameEl = document.getElementById('status-blame');
+  if (blameEl) { blameEl.textContent = ''; blameEl.title = ''; }
+}
+
+// ┌──────────────────────────────────────────────────┐
+// │  1c. GIT BRANCH AUTO-REFRESH                     │
 // │  Detecta cambios de rama desde la terminal.      │
 // │                                                  │
 // │  Cuando el usuario ejecuta comandos en la        │
@@ -1098,6 +1196,7 @@ function activateTab(tab) {
 
   if (special) {
     document.getElementById('status-language').textContent = special.label;
+    clearBlame();
     if (special.onActivate) special.onActivate(tab);
   } else {
     // Tab de archivo normal → Monaco editor
@@ -1105,6 +1204,7 @@ function activateTab(tab) {
     document.getElementById('status-language').textContent =
       getLanguageDisplayName(tab.language);
     state.editor.focus();
+    clearBlame();
     // Aplicar highlights de modelos/métodos si es PHP
     if (tab.language === 'php') setTimeout(highlightModelCalls, 50);
   }
@@ -3103,6 +3203,12 @@ function initSearchPanel() {
 
 async function refreshGitStatus() {
   if (!state.currentFolder) return;
+
+  // Cachear la raíz del repo para blame y otras operaciones git
+  if (!state.gitRepoRoot) {
+    const rootResult = await window.api.gitRootDir(state.currentFolder);
+    if (!rootResult.error) state.gitRepoRoot = rootResult.output;
+  }
 
   // Obtener branch
   const branchResult = await window.api.gitBranch(state.currentFolder);

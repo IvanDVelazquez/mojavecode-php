@@ -405,6 +405,10 @@ No additional runtime dependencies for database access (uses `mysql`/`psql` CLI)
 
 ## Changelog
 
+### v2.7.3
+
+- **Git Blame Inline** — Shows author, relative date, and commit message at the end of the current line as a subtle italic decoration. Updates with 300ms debounce on cursor movement. Also displays full blame info in the status bar at the bottom.
+
 ### v2.7.2
 
 - **Visual .env Editor** — Opening a `.env` file renders a form-style panel with variables grouped by prefix (APP, DB, MAIL, CACHE, etc.). Inline editing saves changes directly to the file. APP group always first, OTHER always last.

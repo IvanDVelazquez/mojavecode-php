@@ -1819,6 +1819,24 @@ body {
 
 #status-branch { color: var(--accent-teal); }
 
+/* ─── Git Blame (inline + status bar) ─── */
+#status-blame {
+  color: var(--text-muted);
+  font-size: 11px;
+  max-width: 400px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.blame-inline-decoration {
+  color: var(--text-muted) !important;
+  opacity: 0.5;
+  font-style: italic;
+  font-size: 12px !important;
+  pointer-events: none;
+}
+
 /* Badge de entorno Docker/Sail — estilo VS Code Remote indicator.
    Fondo de color sólido para que sea visible de un vistazo. */
 #status-docker-env {
