@@ -422,6 +422,15 @@ Sin dependencias adicionales de runtime para acceso a base de datos (usa CLI de 
 
 ## Changelog
 
+### v2.6.0
+
+- **Soporte Laravel Sail** — Detecta automáticamente `vendor/bin/sail` + `docker-compose.yml` en la raíz del proyecto. Toggle "Run via Sail" desde los menús Composer o Artisan. Badge ⛵ SAIL o 🐳 DOCKER en la barra de estado. Banner informativo de Docker con opción "No mostrar de nuevo".
+- **Consola SQL en DB Viewer** — Consola SQL libre dentro del visor de base de datos. Ejecuta cualquier query (SELECT, UPDATE, DELETE, CREATE, DROP) con `Cmd+Enter`. Los SELECT se muestran como tabla; los DML muestran filas afectadas.
+- **Export de DB** — Exporta cualquier tabla como CSV, o hace dump completo de la base de datos via `mysqldump` / `pg_dump`. Proyectos multi-database muestran un desplegable para elegir cuál exportar.
+- **Colores ANSI en Output** — El panel de output de comandos ahora renderiza códigos de color ANSI (paleta 16 colores, negrita) en lugar de mostrar secuencias de escape crudas.
+- **SQLite Removido** — Visor de base de datos simplificado a MySQL y PostgreSQL únicamente. Elimina la dependencia del CLI sqlite3 y las rutas de código relacionadas.
+- **Fix CSS** — Corregido fondo transparente en el menú desplegable de export (variable CSS indefinida)
+
 ### v2.5.0
 
 - **Paleta de comandos** — `Cmd+Shift+P` abre un buscador de todos los comandos del editor, agrupados por categoria (File, View, Go, Git, Theme, PHP, Laravel). Los comandos de PHP y Laravel solo aparecen cuando el proyecto tiene las herramientas correspondientes detectadas (PHPUnit, Artisan, Pint).

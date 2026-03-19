@@ -359,6 +359,80 @@ function scheduleGitBranchRefresh() {
   }, 500);
 }
 
+/**
+ * Actualiza el badge de entorno Docker en el status bar.
+ *
+ * Muestra tres estados:
+ *  • ⛵ SAIL   — proyecto con Sail activo (fondo azul claro)
+ *  • 🐳 DOCKER — proyecto con Docker exec genérico (fondo azul Docker)
+ *  • oculto    — ejecución local sin contenedor
+ *
+ * @param {object} caps - projectCapabilities enviado por el main process
+ */
+function updateDockerEnvBadge(caps) {
+  const el = document.getElementById('status-docker-env');
+  if (!el) return;
+
+  const isSail   = caps.hasSail && caps.sailEnabled;
+  const isDocker = !isSail && caps.hasDocker && caps.dockerContainer;
+
+  if (isSail) {
+    el.textContent = '⛵ SAIL';
+    el.className = 'env-sail';
+    el.title = 'Laravel Sail active — Artisan & Composer run inside Docker';
+    el.style.display = 'flex';
+  } else if (isDocker) {
+    el.textContent = `🐳 ${caps.dockerContainer}`;
+    el.className = 'env-docker';
+    el.title = `Docker exec active — container: ${caps.dockerContainer}\nworkdir: ${caps.dockerWorkdir}`;
+    el.style.display = 'flex';
+  } else {
+    el.style.display = 'none';
+    el.className = '';
+  }
+}
+
+/**
+ * Muestra el banner informativo de Docker la primera vez que se abre
+ * un proyecto con contenedor activo.
+ *
+ * El banner explica que Artisan y Composer se ejecutan dentro del
+ * contenedor, y ofrece un checkbox "Don't show again" que persiste
+ * en localStorage. Se oculta al hacer click en "Got it".
+ *
+ * @param {object} caps - projectCapabilities del main process
+ */
+function showDockerNoticeIfNeeded(caps) {
+  const isDocker = (caps.hasSail && caps.sailEnabled) || (caps.hasDocker && caps.dockerContainer);
+  const banner = document.getElementById('docker-notice');
+  if (!banner) return;
+
+  // Ocultar siempre primero — puede que el nuevo proyecto no sea Docker
+  banner.style.display = 'none';
+
+  if (!isDocker) return;
+  if (localStorage.getItem('mojavecode-docker-notice-dismissed') === '1') return;
+
+  // Armar el texto según el tipo de entorno
+  const envName = (caps.hasSail && caps.sailEnabled)
+    ? '⛵ Laravel Sail'
+    : `🐳 <strong>${caps.dockerContainer}</strong>`;
+
+  document.getElementById('docker-notice-text').innerHTML =
+    `Artisan &amp; Composer commands run <strong>inside the Docker container</strong> (${envName}). `
+    + `Make sure it's running before executing commands.`;
+
+  document.getElementById('docker-notice-dismiss').checked = false;
+  banner.style.display = 'flex';
+
+  document.getElementById('docker-notice-ok').onclick = () => {
+    if (document.getElementById('docker-notice-dismiss').checked) {
+      localStorage.setItem('mojavecode-docker-notice-dismissed', '1');
+    }
+    banner.style.display = 'none';
+  };
+}
+
 // ┌──────────────────────────────────────────────────┐
 // │  2. TERMINAL                                     │
 // │  Emulador xterm.js conectado a un pty real       │
@@ -3307,8 +3381,19 @@ function initEventListeners() {
   });
   window.api.onAutoSaveChanged((enabled) => { state.autoSave = enabled; });
 
-  // Track project capabilities so command palette can show/hide context-sensitive commands
-  window.api.onProjectCapabilities((caps) => { state.projectCaps = caps; });
+  // Track project capabilities so command palette can show/hide context-sensitive commands.
+  // También actualiza el indicador de Sail en el status bar.
+  window.api.onProjectCapabilities((caps) => {
+    state.projectCaps = caps;
+    updateDockerEnvBadge(caps);
+    showDockerNoticeIfNeeded(caps);
+  });
+
+  // El usuario activó/desactivó Sail desde el menú Artisan o Composer
+  window.api.onSailChanged((enabled) => {
+    if (state.projectCaps) state.projectCaps.sailEnabled = enabled;
+    updateDockerEnvBadge(state.projectCaps || {});
+  });
 
   window.api.onFolderOpened((path) => loadFileTree(path));
   window.api.onFileOpened((path) => {
@@ -4144,6 +4229,83 @@ function escapeHtml(str) {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+/**
+ * Convierte códigos de escape ANSI SGR a spans HTML con estilos inline.
+ * Soporta colores de 16 colores (30–37, 39, 90–97 para fg; 40–47, 49, 100–107 para bg),
+ * negrita (1/22) y reset (0). Secuencias no-color (cursor, borrar línea, etc.) son
+ * eliminadas silenciosamente para que no aparezcan como texto basura.
+ *
+ * @param {string} raw - Texto con códigos ANSI
+ * @returns {string} HTML seguro para insertar en innerHTML
+ */
+function ansiToHtml(raw) {
+  // Colores de 16 — paleta tipo One Dark para que quede bien en ambos temas
+  const FG = {
+    30: '#666',    31: '#e06c75', 32: '#98c379', 33: '#e5c07b',
+    34: '#61afef', 35: '#c678dd', 36: '#56b6c2', 37: '#ddd',
+    90: '#888',    91: '#ff7675', 92: '#a3e08c', 93: '#ffeaa7',
+    94: '#74b9ff', 95: '#fd79a8', 96: '#81ecec', 97: '#fff',
+  };
+  const BG = {
+    40: '#2c2c2c', 41: '#8b0000', 42: '#1e5c2e', 43: '#7d6608',
+    44: '#1a5276', 45: '#7d3c98', 46: '#0e6655', 47: '#999',
+    100: '#555',   101: '#c0392b', 102: '#27ae60', 103: '#d4ac0d',
+    104: '#2980b9', 105: '#8e44ad', 106: '#148f77', 107: '#eee',
+  };
+
+  // Eliminar secuencias ANSI no-color antes de procesar
+  // (movimiento de cursor, borrar pantalla, OSC, etc.)
+  const cleaned = raw.replace(/\x1b\[[0-9;]*[A-HJKSTf]/g, '')
+                     .replace(/\x1b\][^\x07]*\x07/g, '')
+                     .replace(/\x1b[()][AB012]/g, '');
+
+  // Dividir en [texto, códigos, texto, códigos, ...]
+  const parts = cleaned.split(/\x1b\[([0-9;]*)m/);
+  let html = '';
+  let openSpans = 0;
+
+  for (let i = 0; i < parts.length; i++) {
+    if (i % 2 === 0) {
+      // Texto plano — escapar HTML
+      html += parts[i]
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+    } else {
+      // Cerrar todos los spans abiertos antes de abrir nuevos
+      html += '</span>'.repeat(openSpans);
+      openSpans = 0;
+
+      // Código vacío o 0 = reset, ya cerramos todo arriba
+      if (!parts[i] || parts[i] === '0') continue;
+
+      const codes = parts[i].split(';').map(Number);
+      let fg = null, bg = null, bold = false;
+
+      for (const c of codes) {
+        if (c === 1)  { bold = true; }
+        else if (c === 22) { bold = false; }
+        else if (FG[c] !== undefined) { fg = FG[c]; }
+        else if (BG[c] !== undefined) { bg = BG[c]; }
+        // 39/49 = default fg/bg — ya se resetea al cerrar el span
+      }
+
+      let style = '';
+      if (fg) style += `color:${fg};`;
+      if (bg) style += `background:${bg};padding:1px 5px;border-radius:3px;`;
+      if (bold) style += 'font-weight:700;';
+
+      if (style) {
+        html += `<span style="${style}">`;
+        openSpans++;
+      }
+    }
+  }
+
+  html += '</span>'.repeat(openSpans);
+  return html;
+}
+
 function updateQuickOpenSelection() {
   quickOpen.resultsList.querySelectorAll('.qo-item').forEach((el, i) => {
     el.classList.toggle('selected', i === quickOpen.selectedIndex);
@@ -4933,7 +5095,7 @@ function showCommandOutput(title, output, error, code) {
       <span class="cmd-output-title">${escapeHtml(title)}</span>
       <button class="cmd-output-close" id="cmd-output-close-btn">Close</button>
     </div>
-    <div class="cmd-output-body ${isError ? 'cmd-output-error' : 'cmd-output-success'}">${escapeHtml(bodyText || 'Done (no output)')}</div>
+    <div class="cmd-output-body ${isError ? 'cmd-output-error' : 'cmd-output-success'}">${ansiToHtml(bodyText || 'Done (no output)')}</div>
   `;
 
   document.getElementById('cmd-output-close-btn').addEventListener('click', () => {
@@ -5181,24 +5343,38 @@ async function loadDbTables() {
     connections = connResult.connections;
   }
 
-  if (connections.length === 0) {
+  if (!connections || connections.length === 0) {
     container.innerHTML = '<div class="db-error">No database configured in .env</div>';
     return;
   }
 
   const multiDb = connections.length > 1;
 
-  // Header global con search
+  // Header global con search + botón export dump
+  const firstConnKey = connections[0]?.key || '';
   let html = `
     <div class="db-header">
       <span class="db-header-title">${multiDb ? `${connections.length} Databases` : escapeHtml(connections[0].config.database)}</span>
       ${!multiDb ? `<span class="db-header-host">${escapeHtml(connections[0].config.connection)}://${escapeHtml(connections[0].config.host)}:${connections[0].config.port}</span>` : ''}
       <span class="db-header-count"></span>
+      <button class="db-btn-console" id="db-btn-console" title="SQL Console">SQL</button>
       <div class="db-search-bar" id="db-search-bar" style="display:none">
         <input id="db-search-input" type="text" placeholder="Filter tables..." autocomplete="off" spellcheck="false" />
         <span id="db-search-count" class="route-search-count"></span>
         <button id="db-search-close" class="route-search-close" title="Close (Esc)">&times;</button>
       </div>
+    </div>
+    <div class="db-console" id="db-console" style="display:none">
+      <div class="db-console-header">
+        <span class="db-console-title">SQL Console</span>
+        <select class="db-console-conn" id="db-console-conn">
+          ${connections.map((c) => `<option value="${escapeAttr(c.key)}">${escapeHtml(c.config.database)}</option>`).join('')}
+        </select>
+        <button class="db-console-run" id="db-console-run" title="Run (Cmd+Enter)">▶ Run</button>
+        <button class="db-console-clear" id="db-console-clear" title="Clear results">Clear</button>
+      </div>
+      <textarea class="db-console-input" id="db-console-input" placeholder="SELECT * FROM users LIMIT 10;" spellcheck="false" rows="4"></textarea>
+      <div class="db-console-results" id="db-console-results"></div>
     </div>`;
 
   // Cargar tablas de cada conexión en paralelo
@@ -5254,9 +5430,20 @@ async function loadDbTables() {
 
   container.innerHTML = html;
 
-  // Actualizar conteo total
+  // Actualizar conteo total + botón Export DB al lado
   const headerCount = container.querySelector('.db-header-count');
-  if (headerCount) headerCount.textContent = `${totalTables} tables`;
+  if (headerCount) {
+    headerCount.innerHTML = `${totalTables} tables <button class="db-btn-dump" id="db-btn-dump" title="Export full database dump">Export DB</button>`;
+  }
+
+  // ── SQL Console ────────────────────────────────────────────────
+  initDbConsole(container, connections);
+
+  // ── Export DB dump ─────────────────────────────────────────────
+  const dumpBtn = container.querySelector('#db-btn-dump');
+  if (dumpBtn) {
+    dumpBtn.addEventListener('click', () => dbExportDump(null, connections));
+  }
 
   // Click handlers para secciones de conexión (collapse/expand)
   if (multiDb) {
@@ -5533,7 +5720,10 @@ async function dbRunQuery(tableName, column, operator, value, limit, resultsDiv,
   const pkIndex = pkColumn ? result.columns.indexOf(pkColumn) : -1;
 
   let html = `<div class="db-query-sql">${escapeHtml(result.sql)}</div>
-    <div class="db-query-info">${result.rows.length} row${result.rows.length !== 1 ? 's' : ''}${pkColumn ? ' — double-click cell to edit' : ''}</div>
+    <div class="db-query-info">
+      ${result.rows.length} row${result.rows.length !== 1 ? 's' : ''}${pkColumn ? ' — double-click cell to edit' : ''}
+      <button class="db-btn-export-csv" data-table="${escapeAttr(tableName)}" data-conn-key="${escapeAttr(connKey || '')}" title="Export table as CSV">Export CSV</button>
+    </div>
     <div class="db-results-table-wrap">
     <table class="db-results-table" data-table="${escapeAttr(tableName)}" data-pk="${escapeAttr(pkColumn || '')}" data-conn-key="${escapeAttr(connKey || '')}">
       <thead><tr>${result.columns.map((c) => `<th>${escapeHtml(c)}</th>`).join('')}</tr></thead>
@@ -5559,6 +5749,201 @@ async function dbRunQuery(tableName, column, operator, value, limit, resultsDiv,
       td.addEventListener('dblclick', () => dbStartCellEdit(td));
     });
   }
+
+  // Export CSV de la tabla completa (no solo los rows visibles)
+  const csvBtn = resultsDiv.querySelector('.db-btn-export-csv');
+  if (csvBtn) {
+    csvBtn.addEventListener('click', async () => {
+      const tbl = csvBtn.dataset.table;
+      const cKey = csvBtn.dataset.connKey || undefined;
+      csvBtn.textContent = 'Exporting...';
+      csvBtn.disabled = true;
+      const res = await window.api.dbExport('csv', tbl, cKey);
+      csvBtn.textContent = 'Export CSV';
+      csvBtn.disabled = false;
+      if (res.error) { alert(`Export failed:\n${res.error}`); return; }
+      dbDownloadFile(res.filename, res.data);
+    });
+  }
+}
+
+/**
+ * Descarga un string como archivo en el sistema de archivos del usuario
+ * usando un <a download> temporal. Funciona dentro del contexto Electron
+ * (el renderer tiene acceso al DOM y file:// URLs están permitidas).
+ */
+function dbDownloadFile(filename, content) {
+  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Exporta el dump completo de la base de datos (mysqldump / pg_dump).
+ *
+ * Si hay múltiples conexiones, muestra un menú dropdown para que el
+ * usuario elija cuál exportar, igual que phpMyAdmin cuando hay varias BDs.
+ * Si hay una sola conexión, exporta directo sin preguntar.
+ */
+async function dbExportDump(connKey, connections) {
+  const btn = document.getElementById('db-btn-dump');
+
+  // Si hay múltiples conexiones, mostrar selector
+  if (connections.length > 1 && !connKey) {
+    const existing = document.getElementById('db-dump-menu');
+    if (existing) { existing.remove(); return; }
+
+    const menu = document.createElement('div');
+    menu.id = 'db-dump-menu';
+    menu.className = 'db-dump-menu';
+
+    // Posicionar debajo del botón usando coordenadas absolutas
+    const rect = btn.getBoundingClientRect();
+    const container = document.getElementById('db-viewer-container');
+    const containerRect = container.getBoundingClientRect();
+    menu.style.top = (rect.bottom - containerRect.top) + 'px';
+    menu.style.right = (containerRect.right - rect.right) + 'px';
+
+    for (const conn of connections) {
+      const item = document.createElement('div');
+      item.className = 'db-dump-menu-item';
+      item.textContent = conn.config.database;
+      item.addEventListener('click', () => {
+        menu.remove();
+        dbExportDump(conn.key, connections);
+      });
+      menu.appendChild(item);
+    }
+
+    container.appendChild(menu);
+
+    // Cerrar al hacer click fuera
+    const close = (e) => {
+      if (!menu.contains(e.target) && e.target !== btn) {
+        menu.remove();
+        document.removeEventListener('click', close, true);
+      }
+    };
+    setTimeout(() => document.addEventListener('click', close, true), 0);
+    return;
+  }
+
+  if (btn) { btn.textContent = 'Dumping...'; btn.disabled = true; }
+  const key = connKey || connections[0]?.key;
+  const res = await window.api.dbExport('dump', null, key);
+  if (btn) { btn.textContent = 'Export DB'; btn.disabled = false; }
+  if (res.error) { alert(`Dump failed:\n${res.error}`); return; }
+  dbDownloadFile(res.filename, res.data);
+}
+
+/**
+ * Inicializa la consola SQL interactiva del DB viewer.
+ *
+ * La consola permite ejecutar SQL arbitrario (SELECT, UPDATE, DELETE, INSERT,
+ * CREATE, DROP) contra cualquiera de las conexiones configuradas.
+ * Cmd+Enter ejecuta la query. Los resultados SELECT se muestran como tabla;
+ * los DML muestran filas afectadas.
+ */
+function initDbConsole(container, connections) {
+  const consoleBtn = container.querySelector('#db-btn-console');
+  const consolePanel = container.querySelector('#db-console');
+  const runBtn = container.querySelector('#db-console-run');
+  const clearBtn = container.querySelector('#db-console-clear');
+  const input = container.querySelector('#db-console-input');
+  const results = container.querySelector('#db-console-results');
+  if (!consoleBtn || !consolePanel || !runBtn || !input || !results) return;
+
+  // Toggle del panel al hacer click en el botón SQL
+  consoleBtn.addEventListener('click', () => {
+    const isOpen = consolePanel.style.display !== 'none';
+    consolePanel.style.display = isOpen ? 'none' : '';
+    consoleBtn.classList.toggle('db-btn-console-active', !isOpen);
+    if (!isOpen) input.focus();
+  });
+
+  // Ejecutar query
+  async function runQuery() {
+    const sql = input.value.trim();
+    if (!sql) return;
+
+    const connKey = container.querySelector('#db-console-conn')?.value || undefined;
+    results.innerHTML = '<div class="db-col-loading">Executing...</div>';
+    runBtn.disabled = true;
+
+    const res = await window.api.dbExecute(sql, connKey);
+    runBtn.disabled = false;
+
+    if (res.error) {
+      results.innerHTML = `
+        <div class="db-error" style="font-size:11px;padding:8px 12px">${escapeHtml(res.error)}</div>
+        ${res.sql ? `<div class="db-query-sql">${escapeHtml(res.sql)}</div>` : ''}`;
+      return;
+    }
+
+    // DML/DDL
+    if (res.success) {
+      const msg = res.affected !== null
+        ? `${res.affected} row${res.affected !== 1 ? 's' : ''} affected`
+        : 'Query executed successfully';
+      results.innerHTML = `
+        <div class="db-console-success">${msg}</div>
+        <div class="db-query-sql">${escapeHtml(res.sql)}</div>`;
+      return;
+    }
+
+    // SELECT — tabla de resultados
+    if (!res.rows || res.rows.length === 0) {
+      results.innerHTML = `
+        <div class="db-query-sql">${escapeHtml(res.sql)}</div>
+        <div class="db-col-loading">No results</div>`;
+      return;
+    }
+
+    let tableHtml = `
+      <div class="db-query-sql">${escapeHtml(res.sql)}</div>
+      <div class="db-query-info">${res.rows.length} row${res.rows.length !== 1 ? 's' : ''}</div>
+      <div class="db-results-table-wrap">
+        <table class="db-results-table">
+          <thead><tr>${res.columns.map((c) => `<th>${escapeHtml(c)}</th>`).join('')}</tr></thead>
+          <tbody>`;
+    for (const row of res.rows) {
+      tableHtml += '<tr>' + row.map((cell) => {
+        const isNull = cell === 'NULL' || cell === null || cell === undefined;
+        return `<td${isNull ? ' class="db-cell-null"' : ''}>${isNull ? 'NULL' : escapeHtml(String(cell))}</td>`;
+      }).join('') + '</tr>';
+    }
+    tableHtml += '</tbody></table></div>';
+    results.innerHTML = tableHtml;
+  }
+
+  runBtn.addEventListener('click', runQuery);
+
+  // Cmd+Enter para ejecutar, Tab inserta espacios
+  input.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+      e.preventDefault();
+      runQuery();
+    }
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      const start = input.selectionStart;
+      const end = input.selectionEnd;
+      input.value = input.value.substring(0, start) + '  ' + input.value.substring(end);
+      input.selectionStart = input.selectionEnd = start + 2;
+    }
+  });
+
+  clearBtn.addEventListener('click', () => {
+    results.innerHTML = '';
+    input.value = '';
+    input.focus();
+  });
 }
 
 function dbStartCellEdit(td) {

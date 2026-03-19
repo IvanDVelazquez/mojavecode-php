@@ -1183,6 +1183,47 @@ body {
 .tab-drop-before { box-shadow: inset 2px 0 0 var(--accent); }
 .tab-drop-after  { box-shadow: inset -2px 0 0 var(--accent); }
 
+/* ─── DOCKER NOTICE BANNER ─── */
+#docker-notice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 16px;
+  background: #0e2a3a;
+  border-bottom: 1px solid #2496ed55;
+  font-size: 12.5px;
+  color: #c9d8e8;
+  flex-shrink: 0;
+}
+
+#docker-notice-icon { font-size: 18px; line-height: 1; }
+
+#docker-notice-text { flex: 1; line-height: 1.4; }
+#docker-notice-text strong { color: #fff; }
+
+#docker-notice-check-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+}
+
+#docker-notice-ok {
+  padding: 4px 12px;
+  background: #2496ed;
+  border: none;
+  border-radius: 4px;
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+#docker-notice-ok:hover { background: #1a7fd4; }
+
 /* ─── FILE CHANGED BAR ─── */
 /* Aparece cuando un archivo abierto fue modificado externamente mientras
    tiene cambios sin guardar. El fondo amarillo es una señal de advertencia
@@ -1744,6 +1785,26 @@ body {
 }
 
 #status-branch { color: var(--accent-teal); }
+
+/* Badge de entorno Docker/Sail — estilo VS Code Remote indicator.
+   Fondo de color sólido para que sea visible de un vistazo. */
+#status-docker-env {
+  display: none;
+  align-items: center;
+  gap: 5px;
+  padding: 0 7px;
+  height: 18px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: #fff;
+  cursor: default;
+  white-space: nowrap;
+}
+
+#status-docker-env.env-sail   { background: #0ea5e9; } /* azul Sail */
+#status-docker-env.env-docker { background: #2496ed; } /* azul Docker */
 
 .status-git-btn {
   background: none;
@@ -2391,6 +2452,7 @@ body {
   background: var(--bg-darkest);
   overflow-y: auto;
   font-family: var(--font-ui);
+  position: relative;
 }
 
 .db-loading {
@@ -2430,9 +2492,9 @@ body {
   margin-left: auto;
   font-size: 11px;
   color: var(--text-muted);
-  background: var(--bg-hover);
-  padding: 1px 8px;
-  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .db-connection-group {
@@ -2775,6 +2837,155 @@ body {
 @keyframes db-flash-save {
   0% { background: rgba(63, 185, 80, 0.3); }
   100% { background: transparent; }
+}
+
+/* ─── DB Header buttons ─── */
+.db-btn-console,
+.db-btn-dump {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  cursor: pointer;
+  border: 1px solid var(--border-color);
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  transition: background 0.15s, color 0.15s;
+  flex-shrink: 0;
+}
+.db-btn-console:hover,
+.db-btn-dump:hover {
+  background: var(--accent-primary);
+  color: #fff;
+  border-color: var(--accent-primary);
+}
+.db-btn-console-active {
+  background: var(--accent-primary);
+  color: #fff;
+  border-color: var(--accent-primary);
+}
+.db-btn-export-csv {
+  margin-left: 10px;
+  padding: 1px 7px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  cursor: pointer;
+  border: 1px solid var(--border-color);
+  background: var(--bg-input);
+  color: var(--text-muted);
+  vertical-align: middle;
+  transition: background 0.15s, color 0.15s;
+}
+.db-btn-export-csv:hover {
+  background: var(--accent-primary);
+  color: #fff;
+  border-color: var(--accent-primary);
+}
+
+/* ─── DB Export Dump Menu ─── */
+.db-dump-menu {
+  position: absolute;
+  z-index: 100;
+  min-width: 180px;
+  background: var(--bg-darkest);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  overflow: hidden;
+}
+.db-dump-menu-item {
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-family: var(--font-mono);
+}
+.db-dump-menu-item:hover {
+  background: var(--accent-primary);
+  color: #fff;
+}
+
+/* ─── DB SQL Console ─── */
+.db-console {
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-darkest);
+}
+.db-console-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border-color);
+}
+.db-console-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  flex: 1;
+}
+.db-console-conn {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  max-width: 140px;
+}
+.db-console-run {
+  padding: 2px 10px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  cursor: pointer;
+  border: 1px solid var(--accent-primary);
+  background: var(--accent-primary);
+  color: #fff;
+  transition: opacity 0.15s;
+}
+.db-console-run:hover { opacity: 0.85; }
+.db-console-run:disabled { opacity: 0.5; cursor: default; }
+.db-console-clear {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-muted);
+}
+.db-console-clear:hover { color: var(--text-primary); }
+.db-console-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-primary);
+  background: var(--bg-darkest);
+  border: none;
+  border-bottom: 1px solid var(--border-color);
+  resize: vertical;
+  outline: none;
+  min-height: 60px;
+}
+.db-console-input:focus {
+  background: var(--bg-darkest);
+  border-bottom-color: var(--accent-primary);
+}
+.db-console-results {
+  max-height: 300px;
+  overflow-y: auto;
+}
+.db-console-success {
+  padding: 8px 12px;
+  font-size: 12px;
+  color: #3fb950;
+  font-family: var(--font-mono);
 }
 
 /* ─── ROUTE LIST ─── */

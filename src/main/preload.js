@@ -155,6 +155,13 @@ contextBridge.exposeInMainWorld('api', {
   onPhpunitRunFile: (callback) => ipcRenderer.on('phpunit:runFile', callback),
   onPhpunitRunMethod: (callback) => ipcRenderer.on('phpunit:runMethod', callback),
 
+  // ── Sail / Docker ──
+  // El main avisa al renderer cuando el usuario activa/desactiva Sail
+  // desde el menú Artisan o Composer > Run via Sail.
+  onSailChanged: (callback) => {
+    ipcRenderer.on('sail:changed', (event, enabled) => callback(enabled));
+  },
+
   // ── Menu events: Git ──
   onMenuGitCheckout: (callback) => ipcRenderer.on('menu:git-checkout', callback),
 
@@ -169,6 +176,8 @@ contextBridge.exposeInMainWorld('api', {
   dbGetColumns: (table, connKey) => ipcRenderer.invoke('db:getColumns', table, connKey),
   dbQuery: (table, column, operator, value, limit, connKey) => ipcRenderer.invoke('db:query', table, column, operator, value, limit, connKey),
   dbUpdate: (table, pkCol, pkVal, col, newVal, connKey) => ipcRenderer.invoke('db:update', table, pkCol, pkVal, col, newVal, connKey),
+  dbExecute: (sql, connKey) => ipcRenderer.invoke('db:execute', sql, connKey),
+  dbExport: (type, tableName, connKey) => ipcRenderer.invoke('db:export', type, tableName, connKey),
 
   // ── Laravel Route List ──
   laravelRouteList: () => ipcRenderer.invoke('laravel:routeList'),

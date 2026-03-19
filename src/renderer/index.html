@@ -394,9 +394,20 @@
     </div>
   </div>
 
+  <!-- DOCKER NOTICE BANNER -->
+  <div id="docker-notice" style="display:none">
+    <div id="docker-notice-icon">🐳</div>
+    <div id="docker-notice-text"></div>
+    <label id="docker-notice-check-label">
+      <input type="checkbox" id="docker-notice-dismiss"> Don't show again
+    </label>
+    <button id="docker-notice-ok">Got it</button>
+  </div>
+
   <!-- STATUS BAR -->
   <div id="statusbar">
     <div class="status-left">
+      <div id="status-docker-env" title=""></div>
       <span id="status-branch">⎇ main</span>
       <button id="status-pull" class="status-git-btn" title="Pull">
         <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>

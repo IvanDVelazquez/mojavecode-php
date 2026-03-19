@@ -139,6 +139,8 @@ let projectCapabilities = {
   dockerEnv: false, // .env contiene host.docker.internal
   dockerContainer: null, // nombre del contenedor Docker
   dockerWorkdir: null, // workdir dentro del contenedor
+  hasSail: false,    // vendor/bin/sail presente
+  sailEnabled: false, // usuario habilitó modo Sail (auto-activado al detectar Sail)
   formatOnSave: false, // desactivado por defecto
   autoSave: false, // auto-save desactivado por defecto
   projectRoot: null,
@@ -409,6 +411,19 @@ function createMenu() {
           click: () => mainWindow?.webContents.send('composer:new-laravel'),
         },
         ...(projectCapabilities.hasComposer ? [
+          // Toggle Sail — solo visible cuando el proyecto tiene vendor/bin/sail
+          ...(projectCapabilities.hasSail ? [
+            {
+              label: 'Run via Sail',
+              type: 'checkbox',
+              checked: projectCapabilities.sailEnabled,
+              click: (menuItem) => {
+                projectCapabilities.sailEnabled = menuItem.checked;
+                createMenu();
+                mainWindow?.webContents.send('sail:changed', projectCapabilities.sailEnabled);
+              },
+            },
+          ] : []),
           { type: 'separator' },
           {
             label: 'Install',
@@ -504,6 +519,20 @@ function createMenu() {
           label: 'Run Custom Command...',
           click: () => mainWindow?.webContents.send('artisan:prompt', ''),
         },
+        // ── Sail toggle ──
+        ...(projectCapabilities.hasSail ? [
+          { type: 'separator' },
+          {
+            label: 'Run via Sail',
+            type: 'checkbox',
+            checked: projectCapabilities.sailEnabled,
+            click: (menuItem) => {
+              projectCapabilities.sailEnabled = menuItem.checked;
+              createMenu();
+              mainWindow?.webContents.send('sail:changed', projectCapabilities.sailEnabled);
+            },
+          },
+        ] : []),
         // ── Laravel Modules submenu ──
         ...(projectCapabilities.hasModules ? [
           { type: 'separator' },
@@ -577,7 +606,7 @@ function createMenu() {
             dialog.showMessageBox(mainWindow, {
               type: 'info',
               title: 'MojaveCode PHP',
-              message: 'MojaveCode PHP v2.5.0',
+              message: 'MojaveCode PHP v2.6.0',
               detail: 'A lightweight code editor by MojaveWare.\nBuilt with Electron + Monaco + xterm.js',
             });
           },
@@ -624,6 +653,20 @@ function detectProjectCapabilities(folderPath) {
   // Detectar PHPUnit
   projectCapabilities.hasPhpUnit = fs.existsSync(path.join(folderPath, 'phpunit.xml'))
     || fs.existsSync(path.join(folderPath, 'phpunit.xml.dist'));
+
+  // Detectar Laravel Sail (vendor/bin/sail)
+  //
+  // Sail es la forma oficial de Laravel para correr el proyecto en Docker.
+  // Cuando está disponible y es un proyecto Sail real, usamos ./vendor/bin/sail
+  // en lugar de docker exec.
+  //
+  // IMPORTANTE: Un proyecto puede tener vendor/bin/sail instalado como dependencia
+  // pero correr en un Docker custom (no Sail). Para distinguirlo, exigimos que
+  // el docker-compose.yml esté en la RAÍZ del proyecto Laravel (mismo dir que artisan).
+  // Si el compose está en un directorio padre, es un setup Docker propio → docker exec.
+  projectCapabilities.hasSail = fs.existsSync(path.join(folderPath, 'vendor', 'bin', 'sail'))
+    && fs.existsSync(path.join(folderPath, 'docker-compose.yml'));
+  projectCapabilities.sailEnabled = projectCapabilities.hasSail; // auto-activar al detectar
 
   // Detectar Docker — buscar docker-compose.yml subiendo directorios
   projectCapabilities.hasDocker = false;
@@ -726,13 +769,47 @@ function parseDockerConfig(composePath, projectRoot) {
  * dentro del contenedor via `docker exec`.
  * Devuelve { output, error, code }
  */
+/**
+ * Ejecutar un comando en el proyecto respetando el entorno activo.
+ *
+ * Orden de prioridad:
+ *  1. Laravel Sail  — si `hasSail && sailEnabled`, usa `./vendor/bin/sail`
+ *  2. Docker exec   — si hay container+workdir detectados, usa `docker exec`
+ *  3. Local         — ejecución directa sin contenedor
+ *
+ * Sail toma prioridad porque es más confiable que `docker exec` para proyectos
+ * Laravel: no requiere que el container tenga un nombre fijo ni mapeo de volumes.
+ *
+ * @param {string} cmd  - 'composer' o 'php' (artisan usa php)
+ * @param {string[]} args
+ * @param {string} cwd
+ */
 function runProjectCommand(cmd, args, cwd) {
-  const { dockerContainer, dockerWorkdir } = projectCapabilities;
+  const { hasSail, sailEnabled, dockerContainer, dockerWorkdir } = projectCapabilities;
+
+  // ── Sail (prioridad alta) ─────────────────────────────────────
+  if (hasSail && sailEnabled) {
+    // sail composer <args>  o  sail artisan <subcommand> <args>
+    // Para Artisan: cmd='php', args=['artisan', subcommand, ...]
+    //   → ./vendor/bin/sail artisan subcommand ...
+    // Para Composer: cmd='composer', args=[subcommand, ...]
+    //   → ./vendor/bin/sail composer subcommand ...
+    const sailBin = './vendor/bin/sail';
+    if (cmd === 'php' && args[0] === 'artisan') {
+      return runCommand(sailBin, args, cwd); // args ya empieza con 'artisan'
+    }
+    if (cmd === 'composer') {
+      return runCommand(sailBin, [cmd, ...args], cwd);
+    }
+  }
+
+  // ── Docker exec genérico ──────────────────────────────────────
   if (dockerContainer && dockerWorkdir) {
-    // Ejecutar dentro del contenedor Docker
     const dockerArgs = ['exec', '-w', dockerWorkdir, dockerContainer, cmd, ...args];
     return runCommand('docker', dockerArgs, cwd);
   }
+
+  // ── Ejecución local directa ───────────────────────────────────
   return runCommand(cmd, args, cwd);
 }
 
@@ -1765,24 +1842,17 @@ function getDbConfig() {
 }
 
 // Helper: obtener config de DB ajustada para ejecución local.
-// • MySQL/PostgreSQL: reemplaza host.docker.internal → 127.0.0.1
-// • SQLite: resuelve filePath relativo usando la raíz del proyecto
+// Reemplaza host.docker.internal → 127.0.0.1 para que conecte al host.
 function getLocalDbConfig() {
   const { error, config: cfg } = getDbConfig();
   if (error) return { error };
-  if (cfg.connection === 'sqlite') {
-    if (cfg.filePath && !path.isAbsolute(cfg.filePath)) {
-      cfg.filePath = path.join(projectCapabilities.projectRoot, cfg.filePath);
-    }
-  } else if (cfg.host === 'host.docker.internal') {
+  if (cfg.host === 'host.docker.internal') {
     cfg.host = '127.0.0.1';
   }
   return { config: cfg };
 }
 
 // Helper: obtener todas las conexiones de DB, ajustadas para local.
-// Para SQLite resuelve el filePath relativo al root del proyecto,
-// ya que Laravel almacena DB_DATABASE como "database/database.sqlite".
 function getAllLocalDbConfigs() {
   if (!projectCapabilities.projectRoot) return { error: 'No project open' };
   const env = db.parseEnvFile(projectCapabilities.projectRoot);
@@ -1790,12 +1860,7 @@ function getAllLocalDbConfigs() {
   const connections = db.getAllConnectionConfigs(env);
   if (connections.length === 0) return { error: 'No database configured in .env' };
   for (const conn of connections) {
-    if (conn.config.connection === 'sqlite') {
-      // Resolver path relativo → absoluto usando la raíz del proyecto
-      if (conn.config.filePath && !path.isAbsolute(conn.config.filePath)) {
-        conn.config.filePath = path.join(projectCapabilities.projectRoot, conn.config.filePath);
-      }
-    } else if (conn.config.host === 'host.docker.internal') {
+    if (conn.config.host === 'host.docker.internal') {
       conn.config.host = '127.0.0.1';
     }
   }
@@ -1827,11 +1892,7 @@ ipcMain.handle('db:getTables', async (event, connKey) => {
   if (error) return { error };
 
   let sql;
-  if (cfg.connection === 'sqlite') {
-    // sqlite_master contiene todas las tablas del archivo; excluimos las
-    // tablas internas de SQLite (prefijo "sqlite_") que no son del usuario.
-    sql = "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name";
-  } else if (cfg.connection === 'pgsql') {
+  if (cfg.connection === 'pgsql') {
     sql = "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename";
   } else {
     sql = 'SHOW TABLES';
@@ -1849,21 +1910,7 @@ ipcMain.handle('db:getColumns', async (event, tableName, connKey) => {
   const safeName = db.sanitizeIdentifier(tableName);
   let sql, parseRow;
 
-  if (cfg.connection === 'sqlite') {
-    // PRAGMA table_info devuelve: cid | name | type | notnull | dflt_value | pk
-    // No existe information_schema en SQLite — PRAGMA es el único camino.
-    sql = `PRAGMA table_info("${safeName}")`;
-    parseRow = (line) => {
-      const parts = line.split('\t');
-      return {
-        name: parts[1] || '',
-        type: parts[2] || 'TEXT',
-        nullable: parts[3] === '0',
-        key: parts[5] === '1' ? 'PRI' : null,
-        default: parts[4] || null,
-      };
-    };
-  } else if (cfg.connection === 'pgsql') {
+  if (cfg.connection === 'pgsql') {
     sql = `SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_name = '${db.sanitizeValue(tableName)}' ORDER BY ordinal_position`;
     parseRow = (line) => {
       const [name, type, nullable, defaultVal] = line.split('|');
@@ -1905,8 +1952,8 @@ ipcMain.handle('db:query', async (event, tableName, column, operator, value, lim
   }
 
   let sql = `SELECT * FROM \`${safeTable}\` ${whereClause} LIMIT ${safeLimit}`;
-  // SQLite y PostgreSQL usan comillas dobles para identificadores, no backticks
-  if (cfg.connection === 'pgsql' || cfg.connection === 'sqlite') sql = sql.replace(/`/g, '"');
+  // PostgreSQL usa comillas dobles para identificadores, no backticks
+  if (cfg.connection === 'pgsql') sql = sql.replace(/`/g, '"');
 
   const result = await db.execDb(cfg, sql, { csv: true });
   if (result.error) return { error: result.error, sql };
@@ -1914,8 +1961,7 @@ ipcMain.handle('db:query', async (event, tableName, column, operator, value, lim
   const lines = result.output.split('\n');
   if (lines.length < 1) return { columns: [], rows: [], sql };
 
-  // SQLite con -csv produce el mismo formato CSV que psql --csv
-  if (cfg.connection === 'pgsql' || cfg.connection === 'sqlite') {
+  if (cfg.connection === 'pgsql') {
     return { columns: db.parseCsvLine(lines[0]), rows: lines.slice(1).filter(Boolean).map(db.parseCsvLine), sql };
   }
   return { columns: lines[0].split('\t'), rows: lines.slice(1).filter(Boolean).map((l) => l.split('\t')), sql };
@@ -1933,16 +1979,143 @@ ipcMain.handle('db:update', async (event, tableName, pkColumn, pkValue, column, 
     : `\`${safeCol}\` = '${db.sanitizeValue(newValue)}'`;
 
   let sql = `UPDATE \`${safeTable}\` SET ${setClause} WHERE \`${safePkCol}\` = '${db.sanitizeValue(pkValue)}' LIMIT 1`;
-  // SQLite no soporta UPDATE ... LIMIT sin compilar con SQLITE_ENABLE_UPDATE_DELETE_LIMIT;
-  // PostgreSQL tampoco acepta LIMIT en UPDATE — ambos usan subquery si fuera necesario,
-  // pero como filtramos por PK ya es implícitamente único.
-  if (cfg.connection === 'pgsql' || cfg.connection === 'sqlite') {
+  // PostgreSQL no acepta LIMIT en UPDATE ni backticks
+  if (cfg.connection === 'pgsql') {
     sql = sql.replace(/`/g, '"').replace(/ LIMIT 1/, '');
   }
 
   const result = await db.execDb(cfg, sql);
   if (result.error) return { error: result.error, sql };
   return { success: true, sql };
+});
+
+// ─────────────────────────────────────────────────────
+// 12b. IPC HANDLER — DB EXECUTE (SQL CONSOLE LIBRE)
+// ─────────────────────────────────────────────────────
+
+/**
+ * Ejecuta SQL arbitrario ingresado por el usuario en la consola DB.
+ *
+ * Para SELECT devuelve columnas + filas (formato tabular).
+ * Para UPDATE/INSERT/DELETE/CREATE/DROP devuelve un mensaje de éxito
+ * y el número de filas afectadas si el motor lo reporta.
+ *
+ * La SQL viaja sin sanitizar — es el usuario quien la escribe, igual
+ * que phpMyAdmin o TablePlus. No se expone al exterior.
+ */
+ipcMain.handle('db:execute', async (event, sql, connKey) => {
+  const { error, config: cfg } = connKey ? getLocalDbConfigByKey(connKey) : getLocalDbConfig();
+  if (error) return { error };
+
+  const trimmed = sql.trim();
+  if (!trimmed) return { error: 'Empty query' };
+
+  // Detectar si es un SELECT (o SHOW/EXPLAIN/WITH) para devolver filas
+  const isSelect = /^(SELECT|SHOW|EXPLAIN|WITH|DESCRIBE|DESC)\b/i.test(trimmed);
+
+  const result = await db.execDb(cfg, trimmed, { csv: isSelect });
+  if (result.error) return { error: result.error, sql: trimmed };
+
+  if (!isSelect) {
+    // DML/DDL — el output puede contener "N rows affected" en MySQL,
+    // o estar vacío en psql (éxito silencioso). Normalizar.
+    const affectedMatch = (result.output || '').match(/(\d+)\s+row/i);
+    const affected = affectedMatch ? parseInt(affectedMatch[1]) : null;
+    return { success: true, affected, sql: trimmed };
+  }
+
+  // SELECT — parsear CSV/TSV igual que db:query
+  const lines = (result.output || '').split('\n');
+  if (lines.length < 1 || !lines[0]) return { columns: [], rows: [], sql: trimmed };
+
+  if (cfg.connection === 'pgsql') {
+    return {
+      columns: db.parseCsvLine(lines[0]),
+      rows: lines.slice(1).filter(Boolean).map(db.parseCsvLine),
+      sql: trimmed,
+    };
+  }
+  return {
+    columns: lines[0].split('\t'),
+    rows: lines.slice(1).filter(Boolean).map((l) => l.split('\t')),
+    sql: trimmed,
+  };
+});
+
+// ─────────────────────────────────────────────────────
+// 12c. IPC HANDLER — DB EXPORT
+// ─────────────────────────────────────────────────────
+
+/**
+ * Exporta datos de la base de datos a archivo.
+ *
+ * Tipos soportados:
+ *  • 'csv'  — exporta los resultados de una tabla (SELECT *) como CSV.
+ *             Devuelve el contenido CSV como string para que el renderer
+ *             lo guarde via dialog de archivo.
+ *  • 'dump' — ejecuta mysqldump / pg_dump y devuelve
+ *             el SQL completo del dump como string.
+ *
+ * @param {string} type      - 'csv' | 'dump'
+ * @param {string} tableName - Nombre de la tabla (solo para 'csv')
+ * @param {string} connKey   - Clave de conexión (opcional)
+ */
+ipcMain.handle('db:export', async (event, type, tableName, connKey) => {
+  const { error, config: cfg } = connKey ? getLocalDbConfigByKey(connKey) : getLocalDbConfig();
+  if (error) return { error };
+
+  // ── CSV: SELECT * de la tabla y devolver como string ──────────
+  if (type === 'csv') {
+    const safeTable = db.sanitizeIdentifier(tableName);
+    let sql = `SELECT * FROM \`${safeTable}\``;
+    if (cfg.connection === 'pgsql') {
+      sql = sql.replace(/`/g, '"');
+    }
+    const result = await db.execDb(cfg, sql, { csv: true });
+    if (result.error) return { error: result.error };
+    return { data: result.output, filename: `${safeTable}.csv` };
+  }
+
+  // ── DUMP: volcado completo de la base de datos ─────────────────
+  if (type === 'dump') {
+    if (cfg.connection === 'pgsql') {
+      const pgEnv = { ...process.env, PGPASSWORD: cfg.password };
+      const args = ['-h', cfg.host, '-p', cfg.port, '-U', cfg.username, cfg.database];
+      const result = await new Promise((resolve) => {
+        const { execFile } = require('child_process');
+        execFile('pg_dump', args, { env: pgEnv, timeout: 120000, maxBuffer: 50 * 1024 * 1024 }, (err, stdout, stderr) => {
+          if (err && !stdout) return resolve({ error: stderr || err.message });
+          resolve({ output: stdout });
+        });
+      });
+      if (result.error) return { error: result.error };
+      return { data: result.output, filename: `${cfg.database}_dump.sql` };
+    }
+
+    // MySQL (default)
+    // --single-transaction para backup consistente sin bloquear tablas
+    // --set-gtid-purged=OFF evita warnings de GTID en servidores con GTID habilitado
+    // --no-tablespaces evita permisos innecesarios de PROCESS
+    const args = [
+      '-h', cfg.host, `-P${cfg.port}`, `-u${cfg.username}`,
+      '--single-transaction', '--set-gtid-purged=OFF', '--no-tablespaces',
+      cfg.database,
+    ];
+    if (cfg.password) args.push(`-p${cfg.password}`);
+    const result = await new Promise((resolve) => {
+      const { execFile } = require('child_process');
+      execFile('mysqldump', args, { timeout: 120000, maxBuffer: 50 * 1024 * 1024 }, (err, stdout, stderr) => {
+        // mysqldump manda warnings a stderr incluso cuando tiene éxito.
+        // Solo tratar como error si no hay output Y hay error.
+        if (err && !stdout) return resolve({ error: stderr || err.message });
+        resolve({ output: stdout });
+      });
+    });
+    if (result.error) return { error: result.error };
+    return { data: result.output, filename: `${cfg.database}_dump.sql` };
+  }
+
+  return { error: `Unknown export type: ${type}` };
 });
 
 // ────────────────────────────────────────────

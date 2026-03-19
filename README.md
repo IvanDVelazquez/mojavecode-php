@@ -405,6 +405,15 @@ No additional runtime dependencies for database access (uses `mysql`/`psql` CLI)
 
 ## Changelog
 
+### v2.6.0
+
+- **Laravel Sail Support** — Auto-detects `vendor/bin/sail` + `docker-compose.yml` at project root. Toggle "Run via Sail" from Composer or Artisan menus. Status bar shows ⛵ SAIL or 🐳 DOCKER badge. First-time Docker notice banner with "Don't show again" option.
+- **DB SQL Console** — Free-form SQL console in the database viewer. Execute any query (SELECT, UPDATE, DELETE, CREATE, DROP) with `Cmd+Enter`. SELECT results render as a table; DML shows affected row count.
+- **DB Export** — Export any table as CSV, or dump the full database via `mysqldump` / `pg_dump`. Multi-database projects show a dropdown to pick which DB to export.
+- **ANSI Color Output** — Command output panel now renders ANSI color codes (16-color palette, bold) instead of showing raw escape sequences.
+- **SQLite Removed** — Database viewer simplified to MySQL and PostgreSQL only. Removes sqlite3 CLI dependency and related code paths.
+- **CSS Fix** — Fixed transparent background on export dropdown menu (undefined CSS variable)
+
 ### v2.5.0
 
 - **Command Palette** — `Cmd+Shift+P` opens a searchable list of all editor commands grouped by category (File, View, Go, Git, Theme, PHP, Laravel). PHP and Laravel commands appear only when the project has the relevant tools detected (PHPUnit, Artisan, Pint).
