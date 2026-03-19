@@ -108,6 +108,9 @@ class LspManager {
             publishDiagnostics: {
               relatedInformation: true,
             },
+            rename: {
+              prepareSupport: true,
+            },
             synchronization: {
               didSave: true,
               dynamicRegistration: false,

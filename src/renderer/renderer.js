@@ -416,7 +416,40 @@ function clearBlame() {
 }
 
 // ┌──────────────────────────────────────────────────┐
-// │  1c. GIT BRANCH AUTO-REFRESH                     │
+// │  1c. RENAME SYMBOL NOTIFICATION                  │
+// │  Muestra un toast temporal con la info del       │
+// │  refactor después de un rename exitoso.          │
+// └──────────────────────────────────────────────────┘
+
+/**
+ * Muestra una notificación temporal (toast) informando el resultado
+ * de un rename/refactor: cuántos archivos y ocurrencias se afectaron.
+ *
+ * @param {number} fileCount - Cantidad de archivos modificados
+ * @param {number} editCount - Cantidad total de ocurrencias renombradas
+ * @param {string} newName - Nuevo nombre del símbolo
+ */
+function showRenameInfo(fileCount, editCount, newName) {
+  // Remover toast anterior si existe
+  const existing = document.getElementById('rename-toast');
+  if (existing) existing.remove();
+
+  const toast = document.createElement('div');
+  toast.id = 'rename-toast';
+  toast.className = 'rename-toast';
+  toast.innerHTML = `
+    <span class="rename-toast-icon">✎</span>
+    <span>Renamed to <strong>${escapeHtml(newName)}</strong> — ${editCount} occurrence${editCount !== 1 ? 's' : ''} in ${fileCount} file${fileCount !== 1 ? 's' : ''}</span>
+  `;
+  document.body.appendChild(toast);
+
+  // Auto-remove después de 4 segundos
+  setTimeout(() => toast.classList.add('rename-toast-fade'), 3500);
+  setTimeout(() => toast.remove(), 4000);
+}
+
+// ┌──────────────────────────────────────────────────┐
+// │  1d. GIT BRANCH AUTO-REFRESH                     │
 // │  Detecta cambios de rama desde la terminal.      │
 // │                                                  │
 // │  Cuando el usuario ejecuta comandos en la        │
@@ -5528,6 +5561,14 @@ function buildCommandRegistry() {
       label: 'Git Stash...',
       category: 'Git',
       action: () => showStashOverlay(),
+    },
+
+    // ── Refactor ───────────────────────────────────────────────
+    {
+      id: 'refactor.rename',
+      label: 'Rename Symbol (F2)',
+      category: 'Refactor',
+      action: () => { if (state.editor) state.editor.getAction('editor.action.rename')?.run(); },
     },
 
     // ── Theme ──────────────────────────────────────────────────

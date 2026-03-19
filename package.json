@@ -1,6 +1,6 @@
 {
   "name": "mojavecode-php",
-  "version": "2.7.3",
+  "version": "2.7.4",
   "description": "MojaveCode PHP — A lightweight code editor built with Electron",
   "main": "src/main/main.js",
   "scripts": {

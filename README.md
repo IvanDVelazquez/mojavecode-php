@@ -405,6 +405,10 @@ No additional runtime dependencies for database access (uses `mysql`/`psql` CLI)
 
 ## Changelog
 
+### v2.7.4
+
+- **Rename Symbol (F2)** — LSP-powered rename refactoring for PHP. Press `F2` or right-click → Rename Symbol to rename variables, functions, classes, methods, and properties across all project files. Shows a toast notification with the number of affected files and occurrences. Also available via Command Palette (`Cmd+Shift+P` → "Rename Symbol").
+
 ### v2.7.3
 
 - **Git Blame Inline** — Shows author, relative date, and commit message at the end of the current line as a subtle italic decoration. Updates with 300ms debounce on cursor movement. Also displays full blame info in the status bar at the bottom.

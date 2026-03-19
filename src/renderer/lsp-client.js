@@ -407,6 +407,109 @@ function initLspProviders() {
     },
   });
 
+  // ── RENAME SYMBOL (F2) ──
+  //
+  // Usa prepareRename para validar que el símbolo es renombrable,
+  // luego textDocument/rename para obtener los WorkspaceEdits.
+  // Antes de aplicar, muestra un panel de preview con la lista de
+  // archivos y ocurrencias que serán afectados.
+  monaco.languages.registerRenameProvider('php', {
+    // Validar que la posición es renombrable y devolver el rango del símbolo.
+    // Si prepareRename no está soportado o falla, fallback a la palabra
+    // bajo el cursor — dejamos que textDocument/rename decida si es válido.
+    async resolveRenameLocation(model, position) {
+      if (!lspState.ready) return null;
+
+      // Intentar prepareRename primero
+      try {
+        const response = await window.api.lspRequest('textDocument/prepareRename', {
+          textDocument: { uri: model.uri.toString() },
+          position: monacoToLspPosition(position),
+        });
+
+        if (response) {
+          const range = response.range ? lspToMonacoRange(response.range) : lspToMonacoRange(response);
+          const text = response.placeholder || model.getValueInRange(range);
+          return { range, text };
+        }
+      } catch {
+        // prepareRename no soportado o falló — fallback abajo
+      }
+
+      // Fallback: usar la palabra bajo el cursor
+      const wordInfo = model.getWordAtPosition(position);
+      if (!wordInfo) return { text: '', range: new monaco.Range(1,1,1,1), rejectReason: 'No symbol at cursor' };
+
+      return {
+        text: wordInfo.word,
+        range: new monaco.Range(
+          position.lineNumber, wordInfo.startColumn,
+          position.lineNumber, wordInfo.endColumn
+        ),
+      };
+    },
+
+    // Ejecutar el rename y devolver los edits agrupados por archivo
+    async provideRenameEdits(model, position, newName) {
+      if (!lspState.ready) return null;
+
+      try {
+        const response = await window.api.lspRequest('textDocument/rename', {
+          textDocument: { uri: model.uri.toString() },
+          position: monacoToLspPosition(position),
+          newName,
+        });
+
+        if (!response || !response.changes) return null;
+
+        // Convertir LSP WorkspaceEdit a Monaco WorkspaceEdit
+        const edits = [];
+        let totalEdits = 0;
+        let fileCount = 0;
+
+        for (const [uri, textEdits] of Object.entries(response.changes)) {
+          fileCount++;
+          const resource = monaco.Uri.parse(uri);
+
+          // Pre-crear modelos para archivos no abiertos (igual que go-to-definition)
+          if (!monaco.editor.getModel(resource)) {
+            try {
+              const filePath = resource.path;
+              const fileResult = await window.api.readFile(filePath);
+              if (!fileResult.error) {
+                const ext = filePath.split('.').pop();
+                const lang = getMonacoLanguage(ext);
+                monaco.editor.createModel(fileResult.content, lang, resource);
+              }
+            } catch { /* silencioso */ }
+          }
+
+          for (const edit of textEdits) {
+            totalEdits++;
+            edits.push({
+              resource,
+              textEdit: {
+                range: lspToMonacoRange(edit.range),
+                text: edit.newText,
+              },
+              versionId: undefined,
+            });
+          }
+        }
+
+        // Mostrar info del refactor en el status bar
+        if (typeof showRenameInfo === 'function') {
+          showRenameInfo(fileCount, totalEdits, newName);
+        }
+
+        return { edits };
+      } catch (err) {
+        console.error('[LSP] Rename error:', err);
+        return null;
+      }
+    },
+  });
+
   // ── DIAGNOSTICS (notificaciones del servidor) ──
   window.api.onLspNotification((message) => {
     if (message.method === 'textDocument/publishDiagnostics') {

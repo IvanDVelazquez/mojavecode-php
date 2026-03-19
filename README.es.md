@@ -422,6 +422,10 @@ Sin dependencias adicionales de runtime para acceso a base de datos (usa CLI de 
 
 ## Changelog
 
+### v2.7.4
+
+- **Rename Symbol (F2)** — Refactoring de rename via LSP para PHP. Presioná `F2` o click derecho → Rename Symbol para renombrar variables, funciones, clases, métodos y propiedades en todos los archivos del proyecto. Muestra un toast con la cantidad de archivos y ocurrencias afectadas. También disponible via Command Palette (`Cmd+Shift+P` → "Rename Symbol").
+
 ### v2.7.3
 
 - **Git Blame Inline** — Muestra autor, fecha relativa y mensaje del commit al final de la línea actual como una decoración sutil en itálica. Se actualiza con debounce de 300ms al mover el cursor. También muestra la info completa de blame en la barra de estado inferior.
