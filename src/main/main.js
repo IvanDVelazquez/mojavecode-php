@@ -119,10 +119,12 @@ try {
 }
 
 const { LspManager } = require('./lsp-manager');
+const XdebugManager = require('./xdebug-manager');
 
 let mainWindow;
 let ptyProcess;
 let lspManager = null;
+let xdebugManager = null;
 
 // ── Temas custom del usuario (sincronizados desde el renderer) ──
 let customThemeEntries = []; // Array de { id, name }
@@ -317,6 +319,22 @@ function createMenu() {
           label: 'Reset Zoom',
           accelerator: 'CmdOrCtrl+0',
           click: () => mainWindow?.webContents.send('menu:zoom-reset'),
+        },
+        { type: 'separator' },
+        {
+          label: 'UI Zoom In (Panels)',
+          accelerator: 'CmdOrCtrl+Alt+=',
+          click: () => mainWindow?.webContents.send('menu:ui-zoom-in'),
+        },
+        {
+          label: 'UI Zoom Out (Panels)',
+          accelerator: 'CmdOrCtrl+Alt+-',
+          click: () => mainWindow?.webContents.send('menu:ui-zoom-out'),
+        },
+        {
+          label: 'UI Zoom Reset (Panels)',
+          accelerator: 'CmdOrCtrl+Alt+0',
+          click: () => mainWindow?.webContents.send('menu:ui-zoom-reset'),
         },
         { type: 'separator' },
         { role: 'toggleDevTools' },
@@ -606,7 +624,7 @@ function createMenu() {
             dialog.showMessageBox(mainWindow, {
               type: 'info',
               title: 'MojaveCode PHP',
-              message: 'MojaveCode PHP v2.7.4',
+              message: 'MojaveCode PHP v3.0.0',
               detail: 'A lightweight code editor by MojaveWare.\nBuilt with Electron + Monaco + xterm.js',
             });
           },
@@ -1670,6 +1688,93 @@ ipcMain.on('lsp:notify', (event, method, params) => {
   }
 });
 
+// ────────────────────────────────────────────────────
+// 7b. IPC HANDLERS — XDEBUG (DBGp Debugger)
+// ────────────────────────────────────────────────────
+//
+// Servidor TCP para debugging PHP via Xdebug. El manager escucha
+// conexiones entrantes, gestiona breakpoints, controla la ejecución
+// (run/step/stop), e inspecciona variables y call stack.
+
+ipcMain.handle('xdebug:startListening', async (event, port, pathMappings) => {
+  if (!xdebugManager) xdebugManager = new XdebugManager(mainWindow);
+  return xdebugManager.startListening(port, pathMappings);
+});
+
+ipcMain.handle('xdebug:stopListening', async () => {
+  if (!xdebugManager) return { success: true };
+  return xdebugManager.stopListening();
+});
+
+ipcMain.handle('xdebug:getState', async () => {
+  return xdebugManager ? xdebugManager.state : 'idle';
+});
+
+// Sincronizar breakpoints al main process (para auto-setup al conectar)
+ipcMain.handle('xdebug:syncBreakpoints', async (event, breakpoints) => {
+  if (!xdebugManager) xdebugManager = new XdebugManager(mainWindow);
+  xdebugManager.syncBreakpoints(breakpoints);
+  return { success: true };
+});
+
+// Breakpoints
+ipcMain.handle('xdebug:setBreakpoint', async (event, filePath, line) => {
+  if (!xdebugManager || !xdebugManager.socket) return { error: 'No debug session' };
+  return xdebugManager.setBreakpoint(filePath, line);
+});
+
+ipcMain.handle('xdebug:removeBreakpoint', async (event, bpId) => {
+  if (!xdebugManager || !xdebugManager.socket) return { error: 'No debug session' };
+  return xdebugManager.removeBreakpoint(bpId);
+});
+
+// Execution control
+ipcMain.handle('xdebug:run', async () => {
+  if (!xdebugManager || !xdebugManager.socket) return { error: 'No debug session' };
+  return xdebugManager.run();
+});
+
+ipcMain.handle('xdebug:stepOver', async () => {
+  if (!xdebugManager || !xdebugManager.socket) return { error: 'No debug session' };
+  return xdebugManager.stepOver();
+});
+
+ipcMain.handle('xdebug:stepInto', async () => {
+  if (!xdebugManager || !xdebugManager.socket) return { error: 'No debug session' };
+  return xdebugManager.stepInto();
+});
+
+ipcMain.handle('xdebug:stepOut', async () => {
+  if (!xdebugManager || !xdebugManager.socket) return { error: 'No debug session' };
+  return xdebugManager.stepOut();
+});
+
+ipcMain.handle('xdebug:stop', async () => {
+  if (!xdebugManager || !xdebugManager.socket) return { error: 'No debug session' };
+  return xdebugManager.stop();
+});
+
+// Inspection
+ipcMain.handle('xdebug:getStack', async () => {
+  if (!xdebugManager || !xdebugManager.socket) return { error: 'No debug session' };
+  return xdebugManager.getStackFrames();
+});
+
+ipcMain.handle('xdebug:getContextNames', async (event, depth) => {
+  if (!xdebugManager || !xdebugManager.socket) return { error: 'No debug session' };
+  return xdebugManager.getContextNames(depth);
+});
+
+ipcMain.handle('xdebug:getContext', async (event, contextId, depth) => {
+  if (!xdebugManager || !xdebugManager.socket) return { error: 'No debug session' };
+  return xdebugManager.getContext(contextId, depth);
+});
+
+ipcMain.handle('xdebug:getProperty', async (event, fullname, depth, contextId) => {
+  if (!xdebugManager || !xdebugManager.socket) return { error: 'No debug session' };
+  return xdebugManager.getProperty(fullname, depth, contextId);
+});
+
 // ────────────────────────────────────────────
 // 8. IPC HANDLER — THEME SYNC
 //    Sincroniza el radio button del menú nativo con el tema activo
@@ -2276,6 +2381,95 @@ ipcMain.handle('db:export', async (event, type, tableName, connKey) => {
 // ────────────────────────────────────────────
 // 13. IPC HANDLER — PSR-4 NAMESPACE RESOLVER
 // ────────────────────────────────────────────
+/**
+ * Busca un archivo por nombre dentro del proyecto, ignorando
+ * vendor, node_modules, .git, etc. Devuelve el primer match.
+ * Útil como fallback cuando PSR-4 no puede resolver el path.
+ */
+ipcMain.handle('fs:findFile', async (event, fileName) => {
+  if (!projectCapabilities.projectRoot) return { path: null };
+  const root = projectCapabilities.projectRoot;
+  const ignoreDirs = config.ignore.dirs;
+
+  function search(dir, depth) {
+    if (depth > 10) return null;
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return null; }
+    for (const entry of entries) {
+      if (entry.isFile() && entry.name === fileName) {
+        return path.join(dir, entry.name);
+      }
+    }
+    for (const entry of entries) {
+      if (entry.isDirectory() && !ignoreDirs.has(entry.name) && !entry.name.startsWith('.')) {
+        const found = search(path.join(dir, entry.name), depth + 1);
+        if (found) return found;
+      }
+    }
+    return null;
+  }
+
+  const found = search(root, 0);
+  return { path: found };
+});
+
+/**
+ * Resuelve un FQCN (Fully Qualified Class Name) a un file path usando
+ * los mappings PSR-4 del composer.json. Funciona con Laravel Modules,
+ * namespaces custom, y cualquier estructura PSR-4.
+ *
+ * @param {string} fqcn - Ej: "Modules\\Reservas\\Http\\Controllers\\ReservasController"
+ * @returns {{ path: string|null }}
+ */
+ipcMain.handle('php:resolvePsr4Route', async (event, fqcn) => {
+  if (!projectCapabilities.projectRoot || !projectCapabilities.hasComposer) {
+    return { path: null };
+  }
+
+  const root = projectCapabilities.projectRoot;
+  let composerJson;
+  try {
+    composerJson = JSON.parse(fs.readFileSync(path.join(root, 'composer.json'), 'utf-8'));
+  } catch {
+    return { path: null };
+  }
+
+  const psr4 = {
+    ...(composerJson.autoload?.['psr-4'] || {}),
+    ...(composerJson['autoload-dev']?.['psr-4'] || {}),
+  };
+
+  // Normalizar FQCN: quitar leading backslash
+  const normalized = fqcn.replace(/^\\/, '');
+
+  // Buscar el mapping PSR-4 cuyo namespace prefix matchea el FQCN
+  let bestMatch = null;
+  let bestLen = 0;
+
+  for (const [nsPrefix, dirPath] of Object.entries(psr4)) {
+    const cleanNs = nsPrefix.replace(/\\$/, '');
+    if ((normalized === cleanNs || normalized.startsWith(cleanNs + '\\')) && cleanNs.length > bestLen) {
+      const dirs = Array.isArray(dirPath) ? dirPath : [dirPath];
+      bestMatch = { nsPrefix: cleanNs, dir: dirs[0].replace(/\/$/, '') };
+      bestLen = cleanNs.length;
+    }
+  }
+
+  if (!bestMatch) return { path: null };
+
+  // Convertir el resto del namespace a path
+  const remainder = normalized.slice(bestMatch.nsPrefix.length).replace(/^\\/, '');
+  const relativePath = remainder.replace(/\\/g, '/') + '.php';
+  const fullPath = path.join(root, bestMatch.dir, relativePath);
+
+  // Verificar que el archivo existe
+  if (fs.existsSync(fullPath)) {
+    return { path: fullPath };
+  }
+
+  return { path: null };
+});
+
 ipcMain.handle('php:resolvePsr4', async (event, filePath) => {
   if (!projectCapabilities.projectRoot || !projectCapabilities.hasComposer) {
     return { namespace: null };

@@ -152,6 +152,7 @@ function initEditor() {
       fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
       fontSize: 14,
       lineHeight: 22,
+      glyphMargin: true,
       minimap: { enabled: true },
       scrollBeyondLastLine: false,
       renderWhitespace: 'selection',
@@ -273,6 +274,12 @@ function initEditor() {
     run: () => editorZoomReset(),
   });
 
+  // UI Zoom (sidebar, file tree, debug panel) — handled by global keydown listener
+  // Registered as editor actions for Command Palette access only (no keybindings to avoid conflicts)
+  state.editor.addAction({ id: 'mojavecode.uiZoomIn',    label: 'UI Zoom In (Sidebar/Panels)',    run: () => uiZoomIn() });
+  state.editor.addAction({ id: 'mojavecode.uiZoomOut',   label: 'UI Zoom Out (Sidebar/Panels)',   run: () => uiZoomOut() });
+  state.editor.addAction({ id: 'mojavecode.uiZoomReset', label: 'UI Zoom Reset (Sidebar/Panels)', run: () => uiZoomReset() });
+
   // Restaurar zoom guardado en localStorage
   const savedSize = parseInt(localStorage.getItem('mojavecode-zoom-fontSize'), 10);
   if (savedSize >= state.zoom.min && savedSize <= state.zoom.max) {
@@ -316,6 +323,40 @@ function editorZoomReset() {
 function updateZoomIndicator() {
   const pct = Math.round((state.zoom.fontSize / state.zoom.defaultFontSize) * 100);
   document.getElementById('status-zoom').textContent = `${pct}%`;
+}
+
+// ┌──────────────────────────────────────────────────┐
+// │  1c. UI ZOOM (sidebar, file tree, debug panel)   │
+// │  Ajusta --ui-font-size para escalar paneles      │
+// │  laterales. Independiente del zoom del editor.    │
+// └──────────────────────────────────────────────────┘
+state.uiZoom = {
+  level: parseFloat(localStorage.getItem('mojavecode-ui-zoom') || '1'),
+  default: 1,
+  min: 0.75,
+  max: 1.75,
+  step: 0.05,
+};
+
+// Restaurar UI zoom guardado
+(function restoreUiZoom() {
+  document.documentElement.style.setProperty('--ui-zoom', state.uiZoom.level);
+})();
+
+function applyUiZoom(level) {
+  const clamped = Math.max(state.uiZoom.min, Math.min(parseFloat(level.toFixed(2)), state.uiZoom.max));
+  if (clamped === state.uiZoom.level) return;
+  state.uiZoom.level = clamped;
+  document.documentElement.style.setProperty('--ui-zoom', clamped);
+  localStorage.setItem('mojavecode-ui-zoom', clamped);
+}
+
+function uiZoomIn()    { applyUiZoom(state.uiZoom.level + state.uiZoom.step); }
+function uiZoomOut()   { applyUiZoom(state.uiZoom.level - state.uiZoom.step); }
+function uiZoomReset() {
+  state.uiZoom.level = state.uiZoom.default + 0.01;
+  applyUiZoom(state.uiZoom.default);
+  localStorage.removeItem('mojavecode-ui-zoom');
 }
 
 // ┌──────────────────────────────────────────────────┐
@@ -1238,6 +1279,7 @@ function activateTab(tab) {
       getLanguageDisplayName(tab.language);
     state.editor.focus();
     clearBlame();
+    renderBreakpointDecorations();
     // Aplicar highlights de modelos/métodos si es PHP
     if (tab.language === 'php') setTimeout(highlightModelCalls, 50);
   }
@@ -2982,37 +3024,66 @@ function setActiveActionButton(activeId) {
   });
 }
 
-function showExplorerPanel() {
-  state.sidebarView = 'explorer';
-  document.getElementById('explorer-sections').style.display = '';
+/**
+ * Oculta todos los paneles del sidebar y limpia el timer de git.
+ * Punto central para el switch de vistas — cada showXxxPanel()
+ * llama primero a esta función antes de mostrar su panel.
+ */
+function hideAllSidebarPanels() {
+  document.getElementById('explorer-sections').style.display = 'none';
   document.getElementById('git-panel').style.display = 'none';
   document.getElementById('search-panel').style.display = 'none';
   document.getElementById('log-panel').style.display = 'none';
   document.getElementById('claude-panel').style.display = 'none';
-  document.getElementById('sidebar-header').querySelector('span').textContent =
-    state.currentFolder
-      ? state.currentFolder.split(/[/\\]/).pop().toUpperCase()
-      : 'EXPLORER';
-  setActiveActionButton(null);
+  document.getElementById('debug-panel').style.display = 'none';
   if (state.gitRefreshTimer) {
     clearInterval(state.gitRefreshTimer);
     state.gitRefreshTimer = null;
   }
 }
 
+function showExplorerPanel() {
+  state.sidebarView = 'explorer';
+  hideAllSidebarPanels();
+  document.getElementById('explorer-sections').style.display = '';
+  document.getElementById('sidebar-header').querySelector('span').textContent =
+    state.currentFolder
+      ? state.currentFolder.split(/[/\\]/).pop().toUpperCase()
+      : 'EXPLORER';
+  setActiveActionButton(null);
+}
+
 function showGitPanel() {
   state.sidebarView = 'git';
-  document.getElementById('explorer-sections').style.display = 'none';
+  hideAllSidebarPanels();
   document.getElementById('git-panel').style.display = 'flex';
-  document.getElementById('search-panel').style.display = 'none';
-  document.getElementById('log-panel').style.display = 'none';
-  document.getElementById('claude-panel').style.display = 'none';
   document.getElementById('sidebar-header').querySelector('span').textContent =
     'SOURCE CONTROL';
   setActiveActionButton('btn-toggle-git');
   refreshGitStatus();
-  // Auto-refresh cada 5 segundos mientras el panel está visible
   state.gitRefreshTimer = setInterval(refreshGitStatus, 5000);
+}
+
+/**
+ * Alterna la visibilidad del panel de debug Xdebug.
+ * Si ya está activo, vuelve al explorer.
+ */
+function toggleDebugPanel() {
+  if (state.sidebarView === 'debug') showExplorerPanel();
+  else showDebugPanel();
+}
+
+/**
+ * Muestra el panel de debug Xdebug en el sidebar.
+ * Renderiza la lista de breakpoints al abrirse.
+ */
+function showDebugPanel() {
+  state.sidebarView = 'debug';
+  hideAllSidebarPanels();
+  document.getElementById('debug-panel').style.display = 'flex';
+  document.getElementById('sidebar-header').querySelector('span').textContent = 'DEBUG';
+  setActiveActionButton('btn-debug-panel');
+  renderDebugBreakpointsList();
 }
 
 // ┌──────────────────────────────────────────────────┐
@@ -3038,23 +3109,14 @@ function toggleSearchPanel() {
 
 function showSearchPanel() {
   state.sidebarView = 'search';
-  document.getElementById('explorer-sections').style.display = 'none';
-  document.getElementById('git-panel').style.display = 'none';
+  hideAllSidebarPanels();
   document.getElementById('search-panel').style.display = 'flex';
-  document.getElementById('log-panel').style.display = 'none';
-  document.getElementById('claude-panel').style.display = 'none';
   document.getElementById('sidebar-header').querySelector('span').textContent = 'SEARCH';
   setActiveActionButton('btn-toggle-search');
 
   // Hacer visible el sidebar si estaba oculto
   if (!state.sidebarVisible) {
     toggleSidebar();
-  }
-
-  // Limpiar auto-refresh de git si estaba activo
-  if (state.gitRefreshTimer) {
-    clearInterval(state.gitRefreshTimer);
-    state.gitRefreshTimer = null;
   }
 
   // Focus en el input
@@ -3755,6 +3817,547 @@ async function stashSave() {
 }
 
 // ┌──────────────────────────────────────────────────┐
+// │  7h. XDEBUG INTEGRATION                         │
+// │  Breakpoints en el gutter, toolbar de control,   │
+// │  panel de variables, call stack, y listener TCP. │
+// │  Usa el protocolo DBGp para comunicarse con      │
+// │  Xdebug via xdebug-manager.js en el main.       │
+// └──────────────────────────────────────────────────┘
+
+// ── Breakpoint state ─────────────────────────────────────────
+// { filePath: Set<lineNumber> } — persiste en localStorage
+state.breakpoints = {};
+state.debugState = 'idle';
+state.debugCurrentLineDecos = [];
+state.debugXdebugBreakpointIds = {}; // { "file:line": xdebugId }
+
+/**
+ * Carga breakpoints desde localStorage al iniciar la app.
+ */
+function loadBreakpoints() {
+  try {
+    const saved = localStorage.getItem('mojavecode-breakpoints');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      for (const [filePath, lines] of Object.entries(parsed)) {
+        state.breakpoints[filePath] = new Set(lines);
+      }
+    }
+  } catch { /* ok */ }
+}
+
+/**
+ * Persiste breakpoints a localStorage.
+ */
+function saveBreakpoints() {
+  const serialized = {};
+  for (const [filePath, lines] of Object.entries(state.breakpoints)) {
+    if (lines.size > 0) serialized[filePath] = [...lines];
+  }
+  localStorage.setItem('mojavecode-breakpoints', JSON.stringify(serialized));
+  // Sincronizar al main process para auto-setup inmediato al conectar
+  window.api.xdebugSyncBreakpoints(serialized);
+}
+
+/**
+ * Agrega o quita un breakpoint en una línea. Actualiza decoraciones,
+ * persiste en localStorage, y si hay sesión de debug activa, lo
+ * envía a Xdebug via IPC.
+ *
+ * @param {string} filePath - Path absoluto del archivo
+ * @param {number} line - Número de línea
+ */
+function toggleBreakpoint(filePath, line) {
+  if (!state.breakpoints[filePath]) state.breakpoints[filePath] = new Set();
+
+  if (state.breakpoints[filePath].has(line)) {
+    state.breakpoints[filePath].delete(line);
+    // Quitar de Xdebug si hay sesión activa
+    const key = `${filePath}:${line}`;
+    if (state.debugXdebugBreakpointIds[key]) {
+      window.api.xdebugRemoveBreakpoint(state.debugXdebugBreakpointIds[key]);
+      delete state.debugXdebugBreakpointIds[key];
+    }
+  } else {
+    state.breakpoints[filePath].add(line);
+    // Enviar a Xdebug si hay sesión activa
+    if (state.debugState === 'connected' || state.debugState === 'break') {
+      window.api.xdebugSetBreakpoint(filePath, line).then((res) => {
+        if (res.id) state.debugXdebugBreakpointIds[`${filePath}:${line}`] = res.id;
+      });
+    }
+  }
+
+  saveBreakpoints();
+  renderBreakpointDecorations();
+  renderDebugBreakpointsList();
+}
+
+/**
+ * Renderiza las decoraciones de breakpoints (puntos rojos) en el editor
+ * para el archivo activo.
+ */
+function renderBreakpointDecorations() {
+  if (!state.editor || !state.activeTab || state.activeTab.path.startsWith('__')) return;
+
+  const filePath = state.activeTab.path;
+  const lines = state.breakpoints[filePath];
+  const decos = [];
+
+  if (lines) {
+    for (const line of lines) {
+      decos.push({
+        range: new monaco.Range(line, 1, line, 1),
+        options: {
+          isWholeLine: false,
+          glyphMarginClassName: 'debug-breakpoint',
+          stickiness: 1, // NeverGrowsWhenTypingAtEdges
+        },
+      });
+    }
+  }
+
+  state._breakpointDecos = state.editor.deltaDecorations(state._breakpointDecos || [], decos);
+}
+
+/**
+ * Renderiza la lista de breakpoints en el panel lateral de debug.
+ */
+function renderDebugBreakpointsList() {
+  const list = document.getElementById('debug-breakpoints-list');
+  if (!list) return;
+
+  const allBps = [];
+  for (const [filePath, lines] of Object.entries(state.breakpoints)) {
+    for (const line of lines) {
+      const fileName = filePath.split(/[/\\]/).pop();
+      allBps.push({ filePath, line, fileName });
+    }
+  }
+
+  if (allBps.length === 0) {
+    list.innerHTML = '<div class="debug-empty">No breakpoints</div>';
+    return;
+  }
+
+  list.innerHTML = allBps.map((bp) => `
+    <div class="debug-bp-item" data-file="${escapeAttr(bp.filePath)}" data-line="${bp.line}">
+      <span class="debug-bp-dot"></span>
+      <span class="debug-bp-file">${escapeHtml(bp.fileName)}</span>
+      <span class="debug-bp-line">:${bp.line}</span>
+      <button class="debug-bp-remove" data-file="${escapeAttr(bp.filePath)}" data-line="${bp.line}" title="Remove">×</button>
+    </div>
+  `).join('');
+
+  // Click para navegar al breakpoint
+  list.querySelectorAll('.debug-bp-item').forEach((el) => {
+    el.addEventListener('click', (e) => {
+      if (e.target.closest('.debug-bp-remove')) return;
+      const fp = el.dataset.file;
+      const ln = parseInt(el.dataset.line, 10);
+      const fileName = fp.split(/[/\\]/).pop();
+      openFile(fp, fileName).then(() => {
+        state.editor.revealLineInCenter(ln);
+        state.editor.setPosition({ lineNumber: ln, column: 1 });
+      });
+    });
+  });
+
+  // Botón X para eliminar
+  list.querySelectorAll('.debug-bp-remove').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleBreakpoint(btn.dataset.file, parseInt(btn.dataset.line, 10));
+    });
+  });
+}
+
+/**
+ * Inicializa el gutter click handler para breakpoints y
+ * los event listeners del debug panel.
+ */
+function initDebugPanel() {
+  // ── Gutter click → toggle breakpoint ───────────────────────
+  state.editor.onMouseDown((e) => {
+    if (e.target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN) {
+      if (!state.activeTab || state.activeTab.path.startsWith('__')) return;
+      toggleBreakpoint(state.activeTab.path, e.target.position.lineNumber);
+    }
+  });
+
+  // Cargar breakpoints persistidos y sincronizar al main process
+  loadBreakpoints();
+  saveBreakpoints(); // sync al main para auto-setup
+
+  // ── Debug panel button ─────────────────────────────────────
+  document.getElementById('btn-debug-panel')?.addEventListener('click', toggleDebugPanel);
+
+  // ── Listen button ──────────────────────────────────────────
+  const listenBtn = document.getElementById('debug-listen-btn');
+  listenBtn.addEventListener('click', async () => {
+    if (state.debugState === 'idle' || state.debugState === 'stopped') {
+      // Construir path mappings para Docker/Sail
+      const mappings = [];
+      if (state.projectCaps?.hasSail && state.projectCaps?.sailEnabled) {
+        mappings.push({ remote: '/var/www/html', local: state.projectCaps.projectRoot });
+      } else if (state.projectCaps?.hasDocker && state.projectCaps?.dockerWorkdir && state.projectCaps?.projectRoot) {
+        mappings.push({ remote: state.projectCaps.dockerWorkdir, local: state.projectCaps.projectRoot });
+      }
+      await window.api.xdebugStartListening(9003, mappings);
+    } else {
+      await window.api.xdebugStopListening();
+    }
+  });
+
+  // ── Step controls ──────────────────────────────────────────
+  document.getElementById('debug-continue')?.addEventListener('click', () => window.api.xdebugRun());
+  document.getElementById('debug-step-over')?.addEventListener('click', () => window.api.xdebugStepOver());
+  document.getElementById('debug-step-into')?.addEventListener('click', () => window.api.xdebugStepInto());
+  document.getElementById('debug-step-out')?.addEventListener('click', () => window.api.xdebugStepOut());
+  document.getElementById('debug-stop')?.addEventListener('click', () => window.api.xdebugStop());
+
+  // ── Section collapse ───────────────────────────────────────
+  document.querySelectorAll('.debug-section-header').forEach((header) => {
+    header.addEventListener('click', () => {
+      const chevron = header.querySelector('.debug-section-chevron');
+      const body = header.nextElementSibling;
+      chevron?.classList.toggle('collapsed');
+      body?.classList.toggle('collapsed');
+    });
+  });
+
+  // ── Variable search filter ──────────────────────────────────
+  const varSearchInput = document.getElementById('debug-var-search');
+  if (varSearchInput) {
+    varSearchInput.addEventListener('input', () => {
+      const query = varSearchInput.value.toLowerCase();
+      _renderFilteredVariables(state._debugContexts || [], query);
+    });
+  }
+
+  // ── Keyboard shortcuts ─────────────────────────────────────
+  document.addEventListener('keydown', (e) => {
+    if (state.debugState !== 'break' && state.debugState !== 'running') return;
+    if (e.key === 'F5' && !e.shiftKey) { e.preventDefault(); window.api.xdebugRun(); }
+    else if (e.key === 'F10') { e.preventDefault(); window.api.xdebugStepOver(); }
+    else if (e.key === 'F11' && !e.shiftKey) { e.preventDefault(); window.api.xdebugStepInto(); }
+    else if (e.key === 'F11' && e.shiftKey) { e.preventDefault(); window.api.xdebugStepOut(); }
+    else if (e.key === 'F5' && e.shiftKey) { e.preventDefault(); window.api.xdebugStop(); }
+  });
+
+  // ── Xdebug events ─────────────────────────────────────────
+  window.api.onXdebugStateChanged(({ state: newState }) => {
+    state.debugState = newState;
+    updateDebugUI();
+  });
+
+  // Init se maneja en el main process: auto-setea breakpoints y run
+  // sin pasar por IPC para evitar que scripts cortos terminen antes.
+  window.api.onXdebugInit(() => {
+    // Solo actualizar UI — breakpoints y run ya se enviaron desde main
+  });
+
+  window.api.onXdebugBreak(async ({ file, line }) => {
+    console.log(`[Debug] Break at ${file}:${line}`);
+
+    // Abrir archivo y resaltar línea actual
+    try {
+      const fileName = file.split(/[/\\]/).pop();
+      await openFile(file, fileName);
+      state.editor.revealLineInCenter(line);
+      state.editor.setPosition({ lineNumber: line, column: 1 });
+
+      // Decoración de línea actual (flecha amarilla)
+      state.debugCurrentLineDecos = state.editor.deltaDecorations(state.debugCurrentLineDecos || [], [
+        {
+          range: new monaco.Range(line, 1, line, 1),
+          options: {
+            isWholeLine: true,
+            className: 'debug-current-line',
+            glyphMarginClassName: 'debug-current-arrow',
+          },
+        },
+      ]);
+    } catch (err) {
+      console.warn('[Debug] Failed to open file:', err);
+    }
+
+    // Cargar variables y call stack (siempre, incluso si openFile falló)
+    await loadDebugData();
+  });
+
+  window.api.onXdebugSessionEnd(() => {
+    clearDebugHighlight();
+    state._debugContexts = [];
+    const varSearch = document.getElementById('debug-var-search');
+    if (varSearch) varSearch.value = '';
+    document.getElementById('debug-variables-list').innerHTML = '<div class="debug-empty">Session ended</div>';
+    document.getElementById('debug-callstack-list').innerHTML = '<div class="debug-empty">Session ended</div>';
+  });
+}
+
+/**
+ * Actualiza la UI del debug panel según el estado actual.
+ */
+function updateDebugUI() {
+  const statusText = document.getElementById('debug-status-text');
+  const statusBar = document.getElementById('status-debug');
+  const listenBtn = document.getElementById('debug-listen-btn');
+  const toolbar = document.getElementById('debug-toolbar-inline');
+
+  const labels = {
+    idle: 'Idle', listening: 'Listening...', connected: 'Connected',
+    break: 'Paused', running: 'Running', stopped: 'Stopped',
+  };
+  const colors = {
+    idle: 'var(--text-muted)', listening: 'var(--accent-yellow)',
+    connected: 'var(--accent-green)', break: '#ffcc33',
+    running: 'var(--accent-green)', stopped: 'var(--accent-red)',
+  };
+
+  if (statusText) statusText.textContent = labels[state.debugState] || state.debugState;
+  if (statusBar) {
+    statusBar.textContent = state.debugState !== 'idle' ? `● ${labels[state.debugState]}` : '';
+    statusBar.style.color = colors[state.debugState] || '';
+  }
+
+  // Listen button
+  if (listenBtn) {
+    if (state.debugState === 'idle' || state.debugState === 'stopped') {
+      listenBtn.textContent = 'Listen';
+      listenBtn.className = '';
+    } else {
+      listenBtn.textContent = 'Stop';
+      listenBtn.className = 'debug-listen-active';
+    }
+  }
+
+  // Toolbar de step controls
+  if (toolbar) {
+    toolbar.style.display = (state.debugState === 'break' || state.debugState === 'running') ? 'flex' : 'none';
+  }
+}
+
+/**
+ * Limpia la decoración de línea actual del debugger.
+ */
+function clearDebugHighlight() {
+  if (state.editor && state.debugCurrentLineDecos.length) {
+    state.debugCurrentLineDecos = state.editor.deltaDecorations(state.debugCurrentLineDecos, []);
+  }
+}
+
+/**
+ * Carga variables y call stack desde Xdebug y los renderiza.
+ * Se llama en cada break (breakpoint, step over, step into, step out).
+ */
+async function loadDebugData() {
+  try {
+    // Call stack
+    const stack = await window.api.xdebugGetStack();
+    renderDebugCallStack(Array.isArray(stack) ? stack : []);
+  } catch (err) {
+    console.warn('[Debug] Failed to load call stack:', err);
+  }
+
+  try {
+    // Variables — obtener todos los contextos del frame 0
+    const contexts = await window.api.xdebugGetContextNames(0);
+    if (Array.isArray(contexts)) {
+      const allVars = [];
+      for (const ctx of contexts) {
+        try {
+          const vars = await window.api.xdebugGetContext(ctx.id, 0);
+          allVars.push({ name: ctx.name, id: ctx.id, variables: Array.isArray(vars) ? vars : [] });
+        } catch { /* contexto sin variables */ }
+      }
+      renderDebugVariables(allVars);
+    }
+  } catch (err) {
+    console.warn('[Debug] Failed to load variables:', err);
+  }
+}
+
+/**
+ * Guarda los contextos actuales para re-filtrar sin pedir a Xdebug.
+ */
+state._debugContexts = [];
+
+/**
+ * Renderiza las variables en el panel de debug.
+ * Cada contexto (Locals, Superglobals, Constants) es una sección
+ * colapsable abierta por defecto. Soporta filtro de búsqueda.
+ */
+function renderDebugVariables(contexts) {
+  state._debugContexts = contexts;
+
+  const searchInput = document.getElementById('debug-var-search');
+  const query = (searchInput?.value || '').toLowerCase();
+
+  _renderFilteredVariables(contexts, query);
+}
+
+function _renderFilteredVariables(contexts, query) {
+  const list = document.getElementById('debug-variables-list');
+  if (!list) return;
+
+  if (!contexts.length || contexts.every((c) => c.variables.length === 0)) {
+    list.innerHTML = '<div class="debug-empty">No variables</div>';
+    return;
+  }
+
+  // Recordar qué secciones estaban colapsadas
+  const collapsedSections = new Set();
+  list.querySelectorAll('.debug-ctx-header.collapsed').forEach((el) => {
+    collapsedSections.add(el.dataset.ctxId);
+  });
+
+  list.innerHTML = contexts.map((ctx) => {
+    // Filtrar variables por query (nombre o valor)
+    const filtered = query
+      ? ctx.variables.filter((v) => _varMatchesQuery(v, query))
+      : ctx.variables;
+    if (filtered.length === 0) return '';
+
+    const isCollapsed = !query && collapsedSections.has(String(ctx.id));
+    return `
+      <div class="debug-ctx-section">
+        <div class="debug-ctx-header${isCollapsed ? ' collapsed' : ''}" data-ctx-id="${ctx.id}">
+          <span class="debug-ctx-chevron">${isCollapsed ? '▸' : '▾'}</span>
+          <span class="debug-ctx-name">${escapeHtml(ctx.name)}</span>
+          <span class="debug-ctx-count">${filtered.length}</span>
+        </div>
+        <div class="debug-ctx-body${isCollapsed ? ' collapsed' : ''}">
+          ${filtered.map((v) => renderVariable(v, 0)).join('')}
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  // Collapse/expand de secciones de contexto
+  list.querySelectorAll('.debug-ctx-header').forEach((header) => {
+    header.addEventListener('click', () => {
+      const isCollapsed = header.classList.toggle('collapsed');
+      header.querySelector('.debug-ctx-chevron').textContent = isCollapsed ? '▸' : '▾';
+      header.nextElementSibling.classList.toggle('collapsed', isCollapsed);
+    });
+  });
+
+  // Expand/collapse para variables con hijos (objetos, arrays)
+  _bindVarExpandables(list);
+}
+
+/**
+ * Chequea si una variable matchea el query de búsqueda.
+ * Busca en nombre, valor, y recursivamente en hijos.
+ */
+function _varMatchesQuery(v, query) {
+  if (v.name.toLowerCase().includes(query)) return true;
+  if (v.value && v.value.toLowerCase().includes(query)) return true;
+  if (v.fullname && v.fullname.toLowerCase().includes(query)) return true;
+  if (v.children && v.children.some((c) => _varMatchesQuery(c, query))) return true;
+  return false;
+}
+
+/**
+ * Bindea expand/collapse en variables con hijos (objetos, arrays).
+ */
+function _bindVarExpandables(container) {
+  container.querySelectorAll('.debug-var-expandable').forEach((el) => {
+    if (el._boundExpand) return;
+    el._boundExpand = true;
+    el.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const childrenEl = el.nextElementSibling;
+      if (!childrenEl?.classList.contains('debug-var-children')) return;
+
+      const isOpen = childrenEl.style.display !== 'none';
+      childrenEl.style.display = isOpen ? 'none' : '';
+      el.querySelector('.debug-var-arrow').textContent = isOpen ? '▸' : '▾';
+
+      // Lazy load si no hay hijos cargados
+      if (!isOpen && childrenEl.children.length === 0) {
+        const fullname = el.dataset.fullname;
+        const ctxId = parseInt(el.closest('.debug-ctx-section')?.querySelector('.debug-ctx-header')?.dataset.ctxId || '0', 10);
+        try {
+          const result = await window.api.xdebugGetProperty(fullname, 0, ctxId);
+          if (result?.children) {
+            childrenEl.innerHTML = result.children.map((c) => renderVariable(c, parseInt(el.dataset.depth || '0') + 1)).join('');
+            _bindVarExpandables(childrenEl);
+          }
+        } catch { /* ok */ }
+      }
+    });
+  });
+}
+
+/**
+ * Renderiza una variable individual (recursivo para hijos inline).
+ */
+function renderVariable(v, depth) {
+  const indent = depth * 16;
+  const typeClass = `debug-type-${v.type}`;
+  const displayValue = v.type === 'string' ? `"${escapeHtml(v.value)}"` : escapeHtml(v.value || v.type);
+
+  if (v.hasChildren) {
+    const childrenHtml = v.children.length > 0
+      ? v.children.map((c) => renderVariable(c, depth + 1)).join('')
+      : '';
+    return `
+      <div class="debug-var-expandable" style="padding-left:${indent}px" data-fullname="${escapeAttr(v.fullname)}" data-depth="${depth}">
+        <span class="debug-var-arrow">▸</span>
+        <span class="debug-var-name">${escapeHtml(v.name)}</span>
+        <span class="debug-var-type ${typeClass}">${escapeHtml(v.type)}${v.numChildren ? `(${v.numChildren})` : ''}</span>
+      </div>
+      <div class="debug-var-children" style="display:none">${childrenHtml}</div>
+    `;
+  }
+
+  return `
+    <div class="debug-var-item" style="padding-left:${indent}px">
+      <span class="debug-var-name">${escapeHtml(v.name)}</span>
+      <span class="debug-var-sep">=</span>
+      <span class="debug-var-value ${typeClass}">${displayValue}</span>
+    </div>
+  `;
+}
+
+/**
+ * Renderiza el call stack en el panel de debug.
+ */
+function renderDebugCallStack(frames) {
+  const list = document.getElementById('debug-callstack-list');
+  if (!list) return;
+
+  if (!frames.length) {
+    list.innerHTML = '<div class="debug-empty">No call stack</div>';
+    return;
+  }
+
+  list.innerHTML = frames.map((f, i) => {
+    const fileName = f.file.split(/[/\\]/).pop();
+    return `
+      <div class="debug-stack-item ${i === 0 ? 'debug-stack-active' : ''}" data-file="${escapeAttr(f.file)}" data-line="${f.line}" data-level="${f.level}">
+        <span class="debug-stack-fn">${escapeHtml(f.where)}</span>
+        <span class="debug-stack-loc">${escapeHtml(fileName)}:${f.line}</span>
+      </div>
+    `;
+  }).join('');
+
+  // Click para navegar al frame
+  list.querySelectorAll('.debug-stack-item').forEach((el) => {
+    el.addEventListener('click', async () => {
+      const fp = el.dataset.file;
+      const ln = parseInt(el.dataset.line, 10);
+      const fileName = fp.split(/[/\\]/).pop();
+      await openFile(fp, fileName);
+      state.editor.revealLineInCenter(ln);
+      state.editor.setPosition({ lineNumber: ln, column: 1 });
+    });
+  });
+}
+
+// ┌──────────────────────────────────────────────────┐
 // │  7g. ENV VIEWER                                  │
 // │  Editor visual de archivos .env. Agrupa las      │
 // │  variables por prefijo (APP_, DB_, MAIL_, etc.)  │
@@ -4172,6 +4775,9 @@ function initEventListeners() {
   window.api.onMenuZoomIn(() => editorZoomIn());
   window.api.onMenuZoomOut(() => editorZoomOut());
   window.api.onMenuZoomReset(() => editorZoomReset());
+  window.api.onMenuUiZoomIn(() => uiZoomIn());
+  window.api.onMenuUiZoomOut(() => uiZoomOut());
+  window.api.onMenuUiZoomReset(() => uiZoomReset());
 
   // Click en indicador de zoom → reset
   document.getElementById('status-zoom').addEventListener('click', () => editorZoomReset());
@@ -6961,21 +7567,33 @@ async function loadRouteList() {
   html += '</div>';
   container.innerHTML = html;
 
-  // Click en controller → buscar y abrir archivo
+  // Click en controller → resolver via PSR-4, fallback a búsqueda por nombre
   container.querySelectorAll('.route-clickable').forEach((row) => {
-    row.addEventListener('click', () => {
+    row.addEventListener('click', async () => {
       const action = row.dataset.action;
       if (!action || !state.currentFolder) return;
 
-      // Extraer el namespace del controller: App\Http\Controllers\UserController@index
-      let controllerClass = action.split('@')[0];
-      // Convertir namespace a path: App\Http\Controllers\UserController → app/Http/Controllers/UserController.php
-      const filePath = controllerClass.replace(/\\/g, '/') + '.php';
-      // Intentar con app/ (PSR-4 standard Laravel)
-      const fullPath = state.currentFolder + '/' + filePath.replace(/^App\//, 'app/');
+      const controllerClass = action.split('@')[0];
+      const classFileName = controllerClass.split('\\').pop() + '.php';
 
-      const fileName = fullPath.split(/[/\\]/).pop();
-      openFile(fullPath, fileName);
+      // 1. Intentar resolver via PSR-4 (composer.json autoload)
+      const resolved = await window.api.phpResolvePsr4Route(controllerClass);
+      if (resolved && resolved.path) {
+        openFile(resolved.path, classFileName);
+        return;
+      }
+
+      // 2. Fallback: buscar el archivo por nombre en el proyecto
+      const searchResult = await window.api.findFile(classFileName);
+      if (searchResult && searchResult.path) {
+        openFile(searchResult.path, classFileName);
+        return;
+      }
+
+      // 3. Último fallback: construir path manual
+      const root = state.projectCaps?.projectRoot || state.currentFolder;
+      const filePath = controllerClass.replace(/\\/g, '/').replace(/^App\//, 'app/') + '.php';
+      openFile(root + '/' + filePath, classFileName);
     });
   });
 
@@ -7105,19 +7723,10 @@ function toggleLogPanel() {
 
 async function showLogPanel() {
   state.sidebarView = 'logs';
-  document.getElementById('explorer-sections').style.display = 'none';
-  document.getElementById('git-panel').style.display = 'none';
-  document.getElementById('search-panel').style.display = 'none';
+  hideAllSidebarPanels();
   document.getElementById('log-panel').style.display = 'flex';
-  document.getElementById('claude-panel').style.display = 'none';
   document.getElementById('sidebar-header').querySelector('span').textContent = 'LOGS';
   setActiveActionButton('btn-open-logs');
-
-  if (state.gitRefreshTimer) {
-    clearInterval(state.gitRefreshTimer);
-    state.gitRefreshTimer = null;
-  }
-
   await loadLogFileList();
 }
 
@@ -7629,19 +8238,10 @@ function toggleClaudePanel() {
  */
 async function showClaudePanel() {
   state.sidebarView = 'claude';
-  document.getElementById('explorer-sections').style.display = 'none';
-  document.getElementById('git-panel').style.display = 'none';
-  document.getElementById('search-panel').style.display = 'none';
-  document.getElementById('log-panel').style.display = 'none';
+  hideAllSidebarPanels();
   document.getElementById('claude-panel').style.display = 'flex';
   document.getElementById('sidebar-header').querySelector('span').textContent = 'CLAUDE';
   setActiveActionButton('btn-claude-panel');
-
-  if (state.gitRefreshTimer) {
-    clearInterval(state.gitRefreshTimer);
-    state.gitRefreshTimer = null;
-  }
-
   await renderClaudePanel();
 }
 
@@ -8174,6 +8774,7 @@ function initClaudePanel() {
   initSidebarSections();
   initEventListeners();
   initGitPanel();
+  initDebugPanel();
   initErrorLog();
   initTerminal(); // async, no bloqueante
   initQuickOpen();

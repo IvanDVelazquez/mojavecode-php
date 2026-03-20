@@ -56,6 +56,12 @@ module.exports = {
     ]),
   },
 
+  // Xdebug (DBGp debugger)
+  xdebug: {
+    defaultPort: 9003,         // Xdebug 3 default (Xdebug 2 usaba 9000)
+    connectionTimeout: 30000,  // 30s esperando respuesta
+  },
+
   // Mapeo de extensiones a lenguajes para symbol extraction
   langExtMap: {
     php: 'php', js: 'javascript', jsx: 'javascript', mjs: 'javascript',

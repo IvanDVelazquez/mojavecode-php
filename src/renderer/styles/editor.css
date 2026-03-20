@@ -40,6 +40,8 @@
   --accent-green: #3fb950;
   --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
   --font-ui: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --ui-font-size: 12px;
+  --ui-zoom: 1;
 }
 
 /* Tema claro — paleta derivada del icono MojaveWare:
@@ -161,6 +163,7 @@ body {
   flex-shrink: 0;
   transition: width 0.2s, opacity 0.2s;
   overflow: hidden;
+  zoom: var(--ui-zoom);
 }
 
 #sidebar.hidden {
@@ -215,6 +218,7 @@ body {
 
 #sidebar-action-bar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 2px;
   padding: 4px 12px 6px;
@@ -3315,6 +3319,387 @@ body {
   font-size: 12px;
   color: #3fb950;
   font-family: var(--font-mono);
+}
+
+/* ─── DEBUG PANEL (Xdebug) ─── */
+/* Panel lateral de debugging con secciones para variables,
+   call stack y breakpoints. Incluye controles de ejecución
+   (continue, step over/into/out, stop) y estado del listener. */
+
+#debug-panel {
+  flex: 1;
+  overflow-y: hidden;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+#debug-sections-scroll {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+#debug-controls-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+#debug-listen-btn {
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+  border: 1px solid var(--accent-green);
+  background: var(--accent-green);
+  color: #fff;
+  transition: opacity 0.15s;
+}
+
+#debug-listen-btn:hover { opacity: 0.85; }
+
+#debug-listen-btn.debug-listen-active {
+  background: var(--accent-red);
+  border-color: var(--accent-red);
+}
+
+#debug-status-text {
+  font-size: 11px;
+  color: var(--text-muted);
+  flex: 1;
+}
+
+#debug-port-text {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+#debug-toolbar-inline {
+  display: flex;
+  gap: 2px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-dark);
+  flex-shrink: 0;
+}
+
+#debug-toolbar-inline button {
+  width: 28px;
+  height: 24px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+
+#debug-toolbar-inline button:hover {
+  background: var(--accent-primary);
+  color: #fff;
+  border-color: var(--accent-primary);
+}
+
+#debug-continue:hover { background: var(--accent-green) !important; border-color: var(--accent-green) !important; }
+#debug-stop:hover { background: var(--accent-red) !important; border-color: var(--accent-red) !important; }
+
+/* ─── DEBUG TOOLBAR TOOLTIPS ─── */
+#debug-toolbar-inline button {
+  position: relative;
+}
+
+#debug-toolbar-inline button::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font-size: 11px;
+  font-family: var(--font-ui, system-ui);
+  padding: 4px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+  z-index: 1000;
+  border: 1px solid var(--border);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+#debug-toolbar-inline button:hover::after {
+  opacity: 1;
+}
+
+#status-debug {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* ── Debug sections ── */
+.debug-section { border-bottom: 1px solid var(--border); }
+
+.debug-section-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.debug-section-header:hover { background: var(--bg-hover); }
+
+.debug-section-chevron {
+  font-size: 10px;
+  transition: transform 0.15s;
+}
+
+.debug-section-chevron.collapsed { transform: rotate(-90deg); }
+.debug-section-body.collapsed { display: none; }
+
+.debug-empty {
+  padding: 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+/* ── Breakpoint gutter dot ── */
+.debug-breakpoint {
+  background: var(--accent-red);
+  border-radius: 50%;
+  width: 10px !important;
+  height: 10px !important;
+  margin-top: 5px;
+  margin-left: 4px;
+  cursor: pointer;
+}
+
+/* ── Current execution line ── */
+.debug-current-line {
+  background: rgba(255, 200, 50, 0.12) !important;
+  border-left: 3px solid #ffcc33 !important;
+}
+
+.debug-current-arrow::before {
+  content: '▶';
+  color: #ffcc33;
+  font-size: 10px;
+}
+
+/* ── Breakpoint list ── */
+.debug-bp-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: background 0.1s;
+}
+
+.debug-bp-item:hover { background: var(--bg-hover); }
+
+.debug-bp-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent-red);
+  flex-shrink: 0;
+}
+
+.debug-bp-file {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.debug-bp-line {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.debug-bp-remove {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 14px;
+  cursor: pointer;
+  display: none;
+  padding: 0 4px;
+}
+
+.debug-bp-item:hover .debug-bp-remove { display: block; }
+.debug-bp-remove:hover { color: var(--accent-red); }
+
+/* ── Variables tree — context sections ── */
+.debug-ctx-section {
+  margin-bottom: 2px;
+}
+
+.debug-ctx-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.1s;
+}
+
+.debug-ctx-header:hover {
+  background: var(--bg-hover);
+}
+
+.debug-ctx-chevron {
+  font-size: 9px;
+  color: var(--text-muted);
+  width: 10px;
+  flex-shrink: 0;
+}
+
+.debug-ctx-name {
+  flex: 1;
+}
+
+.debug-ctx-count {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--text-muted);
+  padding: 0 5px;
+  background: var(--bg-active);
+  border-radius: 8px;
+  min-width: 14px;
+  text-align: center;
+}
+
+.debug-ctx-body.collapsed {
+  display: none;
+}
+
+/* ── Variable search filter ── */
+.debug-var-search-box {
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.debug-var-search-box input {
+  width: 100%;
+  background: var(--bg-input, var(--bg-active));
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 3px 7px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  outline: none;
+}
+
+.debug-var-search-box input:focus {
+  border-color: var(--accent-teal);
+}
+
+.debug-var-search-box input::placeholder {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.debug-var-item,
+.debug-var-expandable {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: default;
+  transition: background 0.1s;
+}
+
+.debug-var-expandable { cursor: pointer; }
+.debug-var-item:hover,
+.debug-var-expandable:hover { background: var(--bg-hover); }
+
+.debug-var-arrow {
+  font-size: 9px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  width: 10px;
+}
+
+.debug-var-name { color: var(--text-primary); }
+.debug-var-sep { color: var(--text-muted); }
+.debug-var-value { color: var(--accent-yellow); }
+.debug-var-type { color: var(--text-muted); font-size: 10px; }
+
+.debug-type-string .debug-var-value,
+.debug-var-value.debug-type-string { color: var(--accent-green); }
+.debug-type-int .debug-var-value,
+.debug-type-float .debug-var-value,
+.debug-var-value.debug-type-int,
+.debug-var-value.debug-type-float { color: var(--accent-yellow); }
+.debug-type-bool .debug-var-value,
+.debug-var-value.debug-type-bool { color: var(--accent-blue); }
+.debug-type-null .debug-var-value,
+.debug-var-value.debug-type-null { color: var(--text-muted); font-style: italic; }
+
+.debug-var-children { padding-left: 0; }
+
+/* ── Call stack ── */
+.debug-stack-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 12px;
+  cursor: pointer;
+  font-size: 11px;
+  transition: background 0.1s;
+}
+
+.debug-stack-item:hover { background: var(--bg-hover); }
+
+.debug-stack-active {
+  background: var(--bg-active);
+  border-left: 2px solid #ffcc33;
+}
+
+.debug-stack-fn {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+.debug-stack-loc {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  margin-left: auto;
 }
 
 /* ─── ENV VIEWER (.env visual editor) ─── */

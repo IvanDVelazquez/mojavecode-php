@@ -73,6 +73,9 @@
         <button id="btn-claude-panel" data-tooltip="Claude">
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a7 7 0 0 1 7 7c0 3-1.5 5-4 6.5V18a1 1 0 0 1-1 1h-4a1 1 0 0 1-1-1v-2.5C6.5 14 5 12 5 9a7 7 0 0 1 7-7z"/><line x1="9" y1="21" x2="15" y2="21"/><line x1="9" y1="18" x2="15" y2="18"/></svg>
         </button>
+        <button id="btn-debug-panel" data-tooltip="Debug (Xdebug)">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5,3 19,12 5,21" fill="currentColor" stroke="none"/><rect x="19" y="3" width="2" height="18" rx="1" fill="currentColor" stroke="none"/></svg>
+        </button>
       </div>
       <div id="explorer-sections">
         <!-- FILE TREE (colapsable) -->
@@ -117,6 +120,56 @@
       <!-- CLAUDE PANEL (oculto por defecto) -->
       <div id="claude-panel" style="display:none"></div>
 
+
+      <!-- DEBUG PANEL (Xdebug, oculto por defecto) -->
+      <div id="debug-panel" style="display:none">
+        <div id="debug-controls-bar">
+          <button id="debug-listen-btn" title="Start/Stop Xdebug listener">Listen</button>
+          <span id="debug-status-text">Idle</span>
+          <span id="debug-port-text">:9003</span>
+        </div>
+        <div id="debug-toolbar-inline" style="display:none">
+          <button id="debug-continue" data-tooltip="Continue (F5) — Run to next breakpoint">▶</button>
+          <button id="debug-step-over" data-tooltip="Step Over (F10) — Execute line, skip into functions">⤵</button>
+          <button id="debug-step-into" data-tooltip="Step Into (F11) — Enter function call">↓</button>
+          <button id="debug-step-out" data-tooltip="Step Out (⇧F11) — Exit current function">↑</button>
+          <button id="debug-stop" data-tooltip="Stop (⇧F5) — End debug session">■</button>
+        </div>
+        <div id="debug-sections-scroll">
+          <div class="debug-section">
+            <div class="debug-section-header" data-section="debug-variables">
+              <span class="debug-section-chevron">▾</span>
+              <span>VARIABLES</span>
+            </div>
+            <div class="debug-section-body">
+              <div class="debug-var-search-box">
+                <input type="text" id="debug-var-search" placeholder="Filter variables..." spellcheck="false" />
+              </div>
+              <div id="debug-variables-list">
+                <div class="debug-empty">Not debugging</div>
+              </div>
+            </div>
+          </div>
+          <div class="debug-section">
+            <div class="debug-section-header" data-section="debug-callstack">
+              <span class="debug-section-chevron">▾</span>
+              <span>CALL STACK</span>
+            </div>
+            <div class="debug-section-body" id="debug-callstack-list">
+              <div class="debug-empty">Not debugging</div>
+            </div>
+          </div>
+          <div class="debug-section">
+            <div class="debug-section-header" data-section="debug-breakpoints">
+              <span class="debug-section-chevron">▾</span>
+              <span>BREAKPOINTS</span>
+            </div>
+            <div class="debug-section-body" id="debug-breakpoints-list">
+              <div class="debug-empty">No breakpoints</div>
+            </div>
+          </div>
+        </div>
+      </div>
 
       <!-- LOG PANEL (oculto por defecto) -->
       <div id="log-panel" style="display:none">
@@ -448,6 +501,7 @@
       <span id="status-errors" title="Error Log">0</span>
     </div>
     <div class="status-right">
+      <span id="status-debug" title="Xdebug: Idle"></span>
       <span id="status-blame" title="Git blame for current line"></span>
       <span id="status-cursor">Ln 1, Col 1</span>
       <span id="status-zoom" title="Click to reset zoom">100%</span>

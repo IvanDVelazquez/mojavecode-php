@@ -137,6 +137,7 @@ Electron-builder tecnicamente soporta algunos escenarios de compilacion cruzada,
 - **Gestion de pestanas** — avisos de cambios sin guardar, indicadores de modificacion, **reordenamiento con drag & drop**, multiples pestanas especiales (terminal, git graph, diff, output, base de datos, rutas, logs)
 - **Vista Diff** — comparacion lado a lado para cambios staged y unstaged de git
 - **Zoom** (`Cmd+=` / `Cmd+-` / `Cmd+0`) — ajusta el tamano de fuente del editor de 8px a 40px con altura de linea proporcional. Indicador de porcentaje en la barra de estado (click para resetear). Persistido entre sesiones via localStorage
+- **UI Zoom** (`Cmd+Alt+=` / `Cmd+Alt+-` / `Cmd+Alt+0`) — escala los paneles del sidebar, arbol de archivos y panel de debug independientemente del editor. Accesible desde el menu View. Cross-platform: `Ctrl+Alt` en Windows/Linux
 - **Buscar y Reemplazar** (`Cmd+H`)
 - **Multi-cursor** (`Cmd+D`) — soporte nativo de Monaco
 - **Apertura rapida** (`Cmd+P`) — busqueda fuzzy de archivos en todo el proyecto
@@ -196,6 +197,17 @@ Accesible desde la barra de acciones del sidebar o el menu View. Ejecuta `php ar
 - Badges de metodo con colores: GET (verde), POST (azul), PUT/PATCH (amarillo), DELETE (rojo)
 - Click en una accion de controller para abrir el archivo PHP directamente (resolucion de namespace PSR-4 a ruta)
 
+### Debugger Xdebug
+Debugger PHP integrado usando el protocolo DBGp. Hacé click en el icono de play en la barra de acciones del sidebar para abrir el panel de Debug:
+- **Listener TCP** en puerto 9003 (default de Xdebug 3) — click en "Listen" para empezar a esperar conexiones de Xdebug
+- **Breakpoints** — click en el margen del gutter para toggle de breakpoints. Los puntos rojos persisten entre sesiones (localStorage) y se sincronizan automáticamente a Xdebug al conectar
+- **Controles de ejecución** — Continue (`F5`), Step Over (`F10`), Step Into (`F11`), Step Out (`Shift+F11`), Stop (`Shift+F5`). La toolbar aparece cuando la sesión de debug está pausada
+- **Panel de variables** — muestra Locals, Superglobals y Constants organizados por contexto. Objetos/arrays expandibles con lazy-loading de propiedades anidadas. Filtro de búsqueda en tiempo real por nombre y valor
+- **Call stack** — frames clickeables que navegan al archivo y línea correspondiente
+- **Highlight de línea actual** — flecha amarilla y fondo en la línea pausada
+- **Soporte Docker/Sail** — detecta automáticamente Laravel Sail o Docker y configura path mappings (remoto → local) para que los breakpoints resuelvan correctamente dentro de containers
+- **Indicador en barra de estado** — muestra el estado de debug (Listening, Connected, Paused, Running) con código de colores
+
 ### Visor de Logs
 
 Accesible desde la barra de acciones del sidebar. Lee todos los archivos de log de `storage/logs` (no solo `laravel.log`):
@@ -242,7 +254,7 @@ Panel en el sidebar (icono de bombilla en la barra de acciones) que lee el direc
 
 ### Interfaz y Navegacion
 
-- **Barra de acciones del sidebar** con acceso rapido a Busqueda, Terminal, Git, Base de Datos, Rutas, Logs e integracion con Claude Code
+- **Barra de acciones del sidebar** con acceso rapido a Busqueda, Terminal, Git, Base de Datos, Rutas, Logs, Debug (Xdebug) e integracion con Claude Code
 - **Arbol de archivos** con carga lazy, iconos material, **auto-reveal** (activar una pestana expande y hace scroll hasta el archivo en el arbol, como el "Reveal in Side Bar" de VS Code) y **menu contextual con click derecho** (Copiar Ruta, Copiar, Pegar, Eliminar)
 - **Sidebar redimensionable** — arrastra el borde derecho para ajustar el ancho (150px–600px)
 - **Barra de breadcrumb** — muestra la ruta relativa del archivo activo entre la barra de pestanas y el editor, facilitando distinguir archivos con el mismo nombre en diferentes directorios
@@ -275,7 +287,15 @@ Panel en el sidebar (icono de bombilla en la barra de acciones) que lee el direc
 | `Cmd+=` | Acercar zoom |
 | `Cmd+-` | Alejar zoom |
 | `Cmd+0` | Resetear zoom |
+| `Cmd+Alt+=` | UI Zoom acercar (sidebar/paneles) |
+| `Cmd+Alt+-` | UI Zoom alejar (sidebar/paneles) |
+| `Cmd+Alt+0` | UI Zoom resetear (sidebar/paneles) |
 | `Cmd+D` | Agregar seleccion a la siguiente coincidencia (multi-cursor) |
+| `F5` | Continuar (debug) |
+| `F10` | Step Over (debug) |
+| `F11` | Step Into (debug) |
+| `Shift+F11` | Step Out (debug) |
+| `Shift+F5` | Detener debug |
 
 ---
 
@@ -288,6 +308,7 @@ mojavecode-php/
 │   │   ├── main.js                  # Ventana, menus, IPC, pty, git, composer, artisan, db, busqueda
 │   │   ├── preload.js               # Puente seguro de contexto (renderer <-> main)
 │   │   ├── lsp-manager.js           # Ciclo de vida de Intelephense (JSON-RPC 2.0 sobre stdio)
+│   │   ├── xdebug-manager.js       # Servidor de protocolo DBGp para debugging PHP via Xdebug
 │   │   └── db-helper.js             # Parseo de .env, deteccion multi-DB, ejecucion SQL via CLI
 │   │
 │   └── renderer/                    # Proceso renderer de Electron (Chromium)
@@ -325,6 +346,7 @@ mojavecode-php/
 │  │ - Resolver PSR-4    │       │ - Lista de Rutas        │ │
 │  │ - Lector de logs    │       │ - Visor de Logs         │ │
 │  │ - Motor de busqueda │       │ - Selector de Tema      │ │
+│  │ - Xdebug (DBGp)    │       │ - Panel de Debug        │ │
 │  │ - Dialogos          │       │ - Log de Errores        │ │
 │  └────────────────────┘       └────────────────────────┘ │
 │          │                              │                 │
@@ -405,22 +427,26 @@ Sin dependencias adicionales de runtime para acceso a base de datos (usa CLI de 
 
 - El LSP solo soporta PHP (Intelephense). Otros lenguajes tienen resaltado de sintaxis pero no autocompletado ni diagnosticos
 - Sin UI de configuracion — el tamano de tabulacion y otras preferencias estan hardcodeadas (el tamano de fuente es ajustable via zoom)
-- El visor de base de datos requiere que `mysql`, `psql` o `sqlite3` CLI esten instalados localmente
-- Sin integracion con Xdebug (breakpoints/debugging)
+- El visor de base de datos requiere que `mysql` o `psql` CLI esten instalados localmente
 
 ---
 
 ## Hoja de ruta
 
 ### Planificado
-- [ ] Integracion con Xdebug (breakpoints y debugging paso a paso)
-- [ ] Visor de `.env` con resaltado de sintaxis y secretos ocultos
 - [ ] UI de configuracion/preferencias
 - [ ] Multiples instancias de terminal
 
 ---
 
 ## Changelog
+
+### v3.0.0
+
+- **Debugger Xdebug** — Debugger PHP integrado usando el protocolo DBGp. Listener TCP en puerto 9003, breakpoints en el gutter (persistidos en localStorage), controles de ejecución (Continue, Step Over/Into/Out, Stop), panel de variables con secciones por contexto y filtro de búsqueda, navegación del call stack, highlight de línea actual, y path mapping para Docker/Sail. Nuevo panel en el sidebar con botón dedicado en la barra de acciones
+- **UI Zoom** — Zoom independiente para paneles del sidebar, árbol de archivos y panel de debug (`Cmd+Alt+=` / `Cmd+Alt+-` / `Cmd+Alt+0`). Disponible desde el menú View con accelerators cross-platform
+- **Resolución PSR-4 en Rutas** — Click en un controller de la Route List ahora resuelve via mapping de namespaces PSR-4 del `composer.json`, con fallback a búsqueda por nombre de archivo. Soporta Laravel Modules y namespaces custom
+- **Refactor del Sidebar** — Centralización del switch de paneles via `hideAllSidebarPanels()`, eliminando lógica duplicada de show/hide en todas las vistas del sidebar
 
 ### v2.7.4
 

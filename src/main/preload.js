@@ -106,6 +106,9 @@ contextBridge.exposeInMainWorld('api', {
   onMenuZoomIn: (callback) => ipcRenderer.on('menu:zoom-in', callback),
   onMenuZoomOut: (callback) => ipcRenderer.on('menu:zoom-out', callback),
   onMenuZoomReset: (callback) => ipcRenderer.on('menu:zoom-reset', callback),
+  onMenuUiZoomIn: (callback) => ipcRenderer.on('menu:ui-zoom-in', callback),
+  onMenuUiZoomOut: (callback) => ipcRenderer.on('menu:ui-zoom-out', callback),
+  onMenuUiZoomReset: (callback) => ipcRenderer.on('menu:ui-zoom-reset', callback),
 
   onFolderOpened: (callback) => {
     ipcRenderer.on('folder:opened', (event, path) => callback(path));
@@ -149,6 +152,27 @@ contextBridge.exposeInMainWorld('api', {
   gitStashDrop: (cwd, ref) => ipcRenderer.invoke('git:stashDrop', cwd, ref),
   gitStashShow: (cwd, ref) => ipcRenderer.invoke('git:stashShow', cwd, ref),
 
+  // ── Xdebug (DBGp Debugger) ──
+  xdebugStartListening: (port, pathMappings) => ipcRenderer.invoke('xdebug:startListening', port, pathMappings),
+  xdebugStopListening: () => ipcRenderer.invoke('xdebug:stopListening'),
+  xdebugGetState: () => ipcRenderer.invoke('xdebug:getState'),
+  xdebugSyncBreakpoints: (breakpoints) => ipcRenderer.invoke('xdebug:syncBreakpoints', breakpoints),
+  xdebugSetBreakpoint: (filePath, line) => ipcRenderer.invoke('xdebug:setBreakpoint', filePath, line),
+  xdebugRemoveBreakpoint: (bpId) => ipcRenderer.invoke('xdebug:removeBreakpoint', bpId),
+  xdebugRun: () => ipcRenderer.invoke('xdebug:run'),
+  xdebugStepOver: () => ipcRenderer.invoke('xdebug:stepOver'),
+  xdebugStepInto: () => ipcRenderer.invoke('xdebug:stepInto'),
+  xdebugStepOut: () => ipcRenderer.invoke('xdebug:stepOut'),
+  xdebugStop: () => ipcRenderer.invoke('xdebug:stop'),
+  xdebugGetStack: () => ipcRenderer.invoke('xdebug:getStack'),
+  xdebugGetContextNames: (depth) => ipcRenderer.invoke('xdebug:getContextNames', depth),
+  xdebugGetContext: (contextId, depth) => ipcRenderer.invoke('xdebug:getContext', contextId, depth),
+  xdebugGetProperty: (fullname, depth, contextId) => ipcRenderer.invoke('xdebug:getProperty', fullname, depth, contextId),
+  onXdebugStateChanged: (cb) => ipcRenderer.on('xdebug:state-changed', (e, s) => cb(s)),
+  onXdebugInit: (cb) => ipcRenderer.on('xdebug:init', (e, d) => cb(d)),
+  onXdebugBreak: (cb) => ipcRenderer.on('xdebug:break', (e, d) => cb(d)),
+  onXdebugSessionEnd: (cb) => ipcRenderer.on('xdebug:session-end', () => cb()),
+
   // ── LSP (Language Server Protocol) ──
   lspStart: (workspaceFolder) => ipcRenderer.invoke('lsp:start', workspaceFolder),
   lspStop: () => ipcRenderer.invoke('lsp:stop'),
@@ -159,7 +183,9 @@ contextBridge.exposeInMainWorld('api', {
   },
 
   // ── PHP Format & PHPUnit ──
+  findFile: (fileName) => ipcRenderer.invoke('fs:findFile', fileName),
   phpResolvePsr4: (filePath) => ipcRenderer.invoke('php:resolvePsr4', filePath),
+  phpResolvePsr4Route: (fqcn) => ipcRenderer.invoke('php:resolvePsr4Route', fqcn),
   phpFormat: (filePath) => ipcRenderer.invoke('php:format', filePath),
   toggleFormatOnSave: (enabled) => ipcRenderer.send('php:toggleFormatOnSave', enabled),
   onFormatOnSaveChanged: (callback) => {
