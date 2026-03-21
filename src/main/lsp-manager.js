@@ -3,8 +3,9 @@
  * LSP MANAGER — Language Server Protocol para MojaveCode PHP
  * ══════════════════════════════════════════════════════════════
  *
- * Maneja el ciclo de vida del servidor LSP (Intelephense) y la
- * comunicación JSON-RPC sobre stdio.
+ * Maneja el ciclo de vida de servidores LSP y la comunicación
+ * JSON-RPC sobre stdio. Soporta múltiples servidores: Intelephense
+ * para PHP y typescript-language-server para TS/JS/React.
  *
  * PROTOCOLO:
  * El LSP usa JSON-RPC 2.0 sobre stdio con framing HTTP-like:
@@ -13,7 +14,7 @@
  *   {"jsonrpc":"2.0","id":1,"method":"initialize","params":{...}}
  *
  * FLUJO:
- * 1. spawn node intelephense --stdio
+ * 1. Spawn del servidor LSP con --stdio
  * 2. Enviar initialize request con capabilities
  * 3. Recibir initialize response
  * 4. Enviar initialized notification
@@ -25,8 +26,13 @@ const path = require('path');
 const os = require('os');
 
 class LspManager {
-  constructor(mainWindow) {
+  /**
+   * @param {Electron.BrowserWindow} mainWindow
+   * @param {string} [ipcChannel='lsp'] - Prefijo del canal IPC (ej: 'lsp' o 'tsLsp')
+   */
+  constructor(mainWindow, ipcChannel = 'lsp') {
     this.mainWindow = mainWindow;
+    this.ipcChannel = ipcChannel;
     this.process = null;
     this.requestId = 0;
     this.pendingRequests = new Map();
@@ -34,42 +40,79 @@ class LspManager {
     this.state = 'stopped'; // stopped | starting | ready
   }
 
+  /**
+   * Inicia el servidor LSP Intelephense para PHP.
+   */
   async start(workspaceFolder) {
+    const intelephensePath = path.join(
+      __dirname, '..', '..', 'node_modules', 'intelephense', 'lib', 'intelephense.js'
+    );
+
+    return this._startServer(
+      [process.execPath, intelephensePath, '--stdio'],
+      workspaceFolder,
+      {
+        storagePath: path.join(os.tmpdir(), 'intelephense'),
+        clearCache: false,
+      }
+    );
+  }
+
+  /**
+   * Inicia el typescript-language-server para TS/JS/JSX/TSX.
+   */
+  async startTs(workspaceFolder) {
+    const tsLspPath = path.join(
+      __dirname, '..', '..', 'node_modules', 'typescript-language-server', 'lib', 'cli.mjs'
+    );
+    const tsLibPath = path.join(
+      __dirname, '..', '..', 'node_modules', 'typescript', 'lib'
+    );
+
+    return this._startServer(
+      [process.execPath, tsLspPath, '--stdio', '--tsserver-path', tsLibPath],
+      workspaceFolder,
+      {}
+    );
+  }
+
+  /**
+   * Lógica común para iniciar cualquier servidor LSP.
+   *
+   * @param {string[]} command - Comando y argumentos para spawn
+   * @param {string} workspaceFolder - Directorio raíz del proyecto
+   * @param {object} initOptions - Opciones adicionales para initializationOptions
+   */
+  async _startServer(command, workspaceFolder, initOptions) {
     if (this.process) {
       this.stop();
     }
 
     this.state = 'starting';
-
-    // Buscar intelephense en node_modules
-    const intelephensePath = path.join(
-      __dirname, '..', '..', 'node_modules', 'intelephense', 'lib', 'intelephense.js'
-    );
+    const tag = `[${this.ipcChannel}]`;
 
     try {
-      this.process = spawn(process.execPath, [intelephensePath, '--stdio'], {
+      this.process = spawn(command[0], command.slice(1), {
         cwd: workspaceFolder,
-        env: { ...process.env },
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
       });
     } catch (err) {
       this.state = 'stopped';
       return { error: err.message };
     }
 
-    // Parsear stdout (JSON-RPC framing)
     this.process.stdout.on('data', (chunk) => {
       this._onData(chunk);
     });
 
     this.process.stderr.on('data', (data) => {
-      console.error('[LSP stderr]', data.toString());
+      console.error(`${tag} stderr:`, data.toString());
     });
 
     this.process.on('exit', (code) => {
-      console.log('[LSP] Process exited with code', code);
+      console.log(`${tag} Process exited with code`, code);
       this.state = 'stopped';
       this.process = null;
-      // Rechazar todas las requests pendientes
       for (const [id, { reject }] of this.pendingRequests) {
         reject(new Error('LSP process exited'));
       }
@@ -77,11 +120,10 @@ class LspManager {
     });
 
     this.process.on('error', (err) => {
-      console.error('[LSP] Process error:', err.message);
+      console.error(`${tag} Process error:`, err.message);
       this.state = 'stopped';
     });
 
-    // Enviar initialize
     try {
       const initResult = await this.sendRequest('initialize', {
         processId: process.pid,
@@ -111,6 +153,22 @@ class LspManager {
             rename: {
               prepareSupport: true,
             },
+            codeAction: {
+              codeActionLiteralSupport: {
+                codeActionKind: {
+                  valueSet: [
+                    'quickfix',
+                    'refactor',
+                    'refactor.extract',
+                    'refactor.inline',
+                    'refactor.rewrite',
+                    'source',
+                    'source.organizeImports',
+                  ],
+                },
+              },
+              resolveSupport: { properties: ['edit'] },
+            },
             synchronization: {
               didSave: true,
               dynamicRegistration: false,
@@ -118,6 +176,7 @@ class LspManager {
           },
           workspace: {
             workspaceFolders: true,
+            applyEdit: true,
           },
         },
         rootUri: `file://${workspaceFolder}`,
@@ -127,13 +186,9 @@ class LspManager {
             name: path.basename(workspaceFolder),
           },
         ],
-        initializationOptions: {
-          storagePath: path.join(os.tmpdir(), 'intelephense'),
-          clearCache: false,
-        },
+        initializationOptions: initOptions,
       });
 
-      // Enviar initialized notification
       this.sendNotification('initialized', {});
       this.state = 'ready';
 
@@ -264,7 +319,7 @@ class LspManager {
     } else if (message.method) {
       // Es una notificación del servidor (e.g., textDocument/publishDiagnostics)
       if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-        this.mainWindow.webContents.send('lsp:notification', {
+        this.mainWindow.webContents.send(`${this.ipcChannel}:notification`, {
           method: message.method,
           params: message.params,
         });

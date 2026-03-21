@@ -153,6 +153,14 @@ Electron-builder tecnicamente soporta algunos escenarios de compilacion cruzada,
 - **Auto-namespace** — abre un archivo `.php` vacio dentro de un directorio mapeado con PSR-4 y el editor genera el boilerplate completo (`<?php`, `namespace`, `class`) automaticamente, leyendo los mapeos de `composer.json`
 - **Formateo PHP al guardar** — detecta Laravel Pint o PHP CS Fixer en el proyecto y formatea archivos `.php` al guardar. Desactivado por defecto, se activa desde el menu PHP. Restaura la posicion del cursor despues del formateo
 - **Runner de PHPUnit** — ejecuta todos los tests, el archivo actual o el metodo actual (detecta `test_*` y `@test`) desde el menu PHP. Resultados mostrados en la pestana Output
+- **Auto-import** (`Ctrl+Space`) — al aceptar una clase del autocompletado se agrega automaticamente el `use` statement al top del archivo. Tambien disponible via Code Actions (`Cmd+.`)
+
+### Lenguajes Frontend (TypeScript, JavaScript, React)
+- **TypeScript Language Server** integrado — autocompletado, ir-a-definicion, hover docs, ayuda de firma, diagnosticos y rename para archivos `.ts`, `.tsx`, `.js`, `.jsx`. Arranca automaticamente junto a Intelephense al abrir un proyecto
+- **Auto-import** (`Ctrl+Space`) — al aceptar un simbolo se agrega automaticamente el `import` (ej: `import { useState } from 'react'`)
+- **Code Actions** (`Cmd+.`) — sugerencias de quick fix y refactoring de ambos servidores LSP (PHP y TS)
+- **Completions HTML** — 50+ tags HTML5 con atributos, 30+ atributos globales (incluyendo directivas de Alpine.js y Livewire), snippets estilo Emmet (`!` para boilerplate, `div.class`, `input:email`, etc.) y auto-cierre de tags. Funciona en `.html` y `.blade.php`
+- **Soporte JSX** — semantic highlighting para JSX/TSX via el worker TypeScript de Monaco con `jsx: React` habilitado
 
 ### Integracion con Composer
 
@@ -223,6 +231,7 @@ Accesible desde la barra de acciones del sidebar. Lee todos los archivos de log 
 
 ### Terminal
 
+- **Multi-terminal** — terminal con tabs y sesiones independientes. Click en `+` para crear una nueva terminal, `×` para cerrar. Cada terminal tiene su propio proceso pty, sesion de shell y buffer de scroll
 - **Terminal integrada** con xterm.js + node-pty
 - Arranca en el directorio raiz del proyecto y se reinicia al cambiar de proyecto
 - Soporte completo de colores, URLs clickeables, scroll suave
@@ -263,6 +272,7 @@ Panel en el sidebar (icono de bombilla en la barra de acciones) que lee el direc
 - **Auto Save** — activar desde File > Auto Save. Guarda automaticamente 1 segundo despues de la ultima pulsacion de tecla
 - **Log de Errores** — captura `console.error`, errores no manejados y promesas rechazadas. Badge rojo en la barra de estado, pestana dedicada con boton de limpiar
 - **Monitor del sistema** — uso de CPU y RAM en la barra de estado
+- **Multi-ventana** (`Cmd+Shift+N`) — abre una instancia independiente de MojaveCode con su propio proyecto, LSP, terminales y debugger. Cada ventana es un proceso separado
 
 ---
 
@@ -271,6 +281,7 @@ Panel en el sidebar (icono de bombilla en la barra de acciones) que lee el direc
 | Atajo | Accion |
 |---|---|
 | `Cmd+O` | Abrir carpeta |
+| `Cmd+Shift+N` | Nueva ventana |
 | `Cmd+Shift+O` | Abrir archivo |
 | `Cmd+Shift+P` | Paleta de comandos |
 | `Cmd+P` | Apertura rapida (busqueda fuzzy de archivos) |
@@ -296,6 +307,8 @@ Panel en el sidebar (icono de bombilla en la barra de acciones) que lee el direc
 | `F11` | Step Into (debug) |
 | `Shift+F11` | Step Out (debug) |
 | `Shift+F5` | Detener debug |
+| `Ctrl+Space` | Disparar autocompletado (con auto-import) |
+| `Cmd+.` | Code actions / quick fixes |
 
 ---
 
@@ -415,7 +428,9 @@ Colores derivados de la marca MojaveWare:
 | Editor | Monaco Editor 0.52 | Edicion de codigo, resaltado de sintaxis, diff |
 | Terminal | xterm.js 5.5 | Emulador de terminal |
 | PTY | node-pty 1.0 | Backend de shell real |
-| LSP | Intelephense 1.16 | Servidor de lenguaje PHP |
+| LSP PHP | Intelephense 1.16 | Servidor de lenguaje PHP |
+| LSP TS | typescript-language-server 5.1 | Servidor de lenguaje TypeScript/JavaScript/React |
+| TypeScript | TypeScript 5.9 | Compilador TS (usado por el TS LSP) |
 | Iconos | material-file-icons 2.4 | Iconos del arbol de archivos |
 | Build | electron-builder 25 | Empaquetado y distribucion |
 
@@ -425,7 +440,7 @@ Sin dependencias adicionales de runtime para acceso a base de datos (usa CLI de 
 
 ## Limitaciones conocidas
 
-- El LSP solo soporta PHP (Intelephense). Otros lenguajes tienen resaltado de sintaxis pero no autocompletado ni diagnosticos
+- LSP soporta PHP (Intelephense) y TypeScript/JavaScript/React (typescript-language-server). Otros lenguajes tienen resaltado de sintaxis pero no autocompletado ni diagnosticos
 - Sin UI de configuracion — el tamano de tabulacion y otras preferencias estan hardcodeadas (el tamano de fuente es ajustable via zoom)
 - El visor de base de datos requiere que `mysql` o `psql` CLI esten instalados localmente
 
@@ -435,11 +450,29 @@ Sin dependencias adicionales de runtime para acceso a base de datos (usa CLI de 
 
 ### Planificado
 - [ ] UI de configuracion/preferencias
-- [ ] Multiples instancias de terminal
+- [ ] Soporte Vue SFC (archivos `.vue` con secciones `<template>`, `<script>`, `<style>`)
+- [ ] Tailwind CSS IntelliSense (sugerencias de clases en atributos `className` y `class`)
 
 ---
 
 ## Changelog
+
+### v3.0.1
+
+- **Fix de flash de tema** — Las ventanas nuevas se abren con el tema custom correcto desde el primer frame. Usa `show: false` + handshake IPC (`theme:ready`) para prevenir el flash del tema dark al iniciar o abrir nuevas ventanas
+- **Fix detección Sail vs Docker** — Proyectos con `vendor/bin/sail` como dependencia de Composer pero corriendo bajo un Docker padre ahora detectan correctamente Docker exec en vez de Sail. Busca todos los `docker-compose.yml` subiendo directorios y usa el primero con `container_name` + volume mapping válido
+- **Fix de tema en Split Editor** — Abrir "Open as Text" desde el visor de .env (o cualquier split pane) ya no resetea Monaco al tema dark por defecto. El editor derecho hereda el tema global en vez de hardcodear `mojavecode-php-dark`
+- **Fix de resultados de búsqueda** — Los resultados anteriores se borran inmediatamente al iniciar una nueva búsqueda, evitando que resultados obsoletos de queries parciales ("r", "rd") se muestren antes de los resultados finales ("rdx")
+- **Colapsar resultados de búsqueda** — Botón (`⊟`/`⊞`) en la barra de estado de búsqueda para colapsar/expandir todos los grupos de archivos de una vez
+- **Colapsar carpetas** — Botón en el header de la sección FILES para colapsar todas las subcarpetas expandidas manteniendo las carpetas raíz abiertas
+- **Zoom en tabs especiales** — El zoom del editor (`Cmd+=`/`Cmd+-`) ahora escala las tabs de Rutas, Database y Error Log proporcionalmente via CSS `zoom` (`--special-tab-zoom`)
+- **Multi-terminal** — Terminal con tabs y sesiones independientes. Cada terminal tiene su propio proceso pty y shell. Crear (`+`), cambiar y cerrar (`×`) terminales desde la barra interna de tabs. Entrada en Command Palette "New Terminal"
+- **TypeScript Language Server** — `typescript-language-server` integrado corre junto a Intelephense. Autocompletado, hover, ir-a-definición, ayuda de firma, diagnósticos y rename para archivos `.ts`, `.tsx`, `.js`, `.jsx`
+- **Auto-import** — Al aceptar un item del autocompletado con `Ctrl+Space` se agrega automáticamente el `use` (PHP) o `import` (JS/TS). Funciona via `additionalTextEdits` de ambos LSPs
+- **Code Actions** (`Cmd+.`) — Sugerencias de quick fix y auto-import de Intelephense y el TypeScript language server. El lightbulb aparece sobre errores/warnings con fixes disponibles
+- **Completions HTML** — 50+ tags HTML5, 30+ atributos globales (incluyendo Alpine.js `x-data`/`x-show` y Livewire `wire:model`/`wire:click`), snippets Emmet y auto-cierre de tags. Funciona en `.html` y `.blade.php`
+- **Multi-ventana** (`Cmd+Shift+N`) — Abre una instancia completamente independiente de MojaveCode con su propio LSP, terminales, debugger y estado de proyecto
+- **Fix de temas custom en Monaco** — Widgets del editor (suggest, hover, peek view, find), decoraciones del gutter e indicadores de error ahora usan colores del tema custom en vez de heredar el azul por defecto de `vs-dark`. 50+ colores de editor definidos por tema
 
 ### v3.0.0
 

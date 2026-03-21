@@ -151,6 +151,14 @@ Electron-builder technically supports some cross-compilation scenarios, but `nod
 - **Auto-namespace** — open an empty `.php` file inside a PSR-4 mapped directory and the editor generates the full boilerplate (`<?php`, `namespace`, `class`) automatically, reading the mappings from `composer.json`
 - **PHP Format on Save** — detects Laravel Pint or PHP CS Fixer in the project and formats `.php` files on save. Disabled by default, toggle from the PHP menu. Restores cursor position after formatting
 - **PHPUnit runner** — run all tests, the current file, or the current method (detects `test_*` and `@test`) from the PHP menu. Results shown in the Output tab
+- **Auto-import** (`Ctrl+Space`) — accepting a class from the completion list automatically adds the `use` statement at the top of the file. Also available via Code Actions (`Cmd+.`)
+
+### Frontend Languages (TypeScript, JavaScript, React)
+- **TypeScript Language Server** built-in — autocomplete, go-to-definition, hover docs, signature help, diagnostics, and rename for `.ts`, `.tsx`, `.js`, `.jsx` files. Starts automatically alongside Intelephense when a project is opened
+- **Auto-import** (`Ctrl+Space`) — accepting a symbol adds the `import` statement automatically (e.g. `import { useState } from 'react'`)
+- **Code Actions** (`Cmd+.`) — quick fixes and refactoring suggestions from both PHP and TS language servers
+- **HTML completions** — 50+ HTML5 tags with attributes, 30+ global attributes (including Alpine.js and Livewire directives), Emmet-style snippets (`!` for boilerplate, `div.class`, `input:email`, etc.), and auto-close tags. Works in `.html` and `.blade.php` files
+- **JSX support** — semantic highlighting for JSX/TSX via Monaco's TypeScript worker with `jsx: React` enabled
 
 ### Composer Integration
 The Composer menu is always visible in the menu bar. Project-specific commands appear when `composer.json` is detected:
@@ -210,6 +218,7 @@ Accessible from the sidebar action bar. Reads all log files from `storage/logs` 
 - **Refresh button** — reload the current log without closing the tab
 
 ### Terminal
+- **Multi-terminal** — tab-based terminal with independent sessions. Click `+` to create a new terminal, `×` to close one. Each terminal has its own pty process, shell session, and scroll buffer
 - **Integrated terminal** powered by xterm.js + node-pty
 - Starts in the project root directory and resets when switching projects
 - Full color support, clickable URLs, smooth scrolling
@@ -247,6 +256,7 @@ A sidebar panel (lightbulb icon in the action bar) that reads the project's `.cl
 - **Auto Save** — toggle from File > Auto Save. Saves automatically 1 second after the last keystroke
 - **Error Log** — captures `console.error`, unhandled errors, and rejected promises. Red badge in status bar, dedicated tab with clear button
 - **System monitor** — CPU and RAM usage in the status bar
+- **Multi-window** (`Cmd+Shift+N`) — opens a new independent MojaveCode instance with its own project, LSP, terminals, and debugger. Each window is a separate process
 
 ---
 
@@ -255,6 +265,7 @@ A sidebar panel (lightbulb icon in the action bar) that reads the project's `.cl
 | Shortcut | Action |
 |---|---|
 | `Cmd+O` | Open folder |
+| `Cmd+Shift+N` | New window |
 | `Cmd+Shift+O` | Open file |
 | `Cmd+Shift+P` | Command Palette |
 | `Cmd+P` | Quick Open (fuzzy file search) |
@@ -280,6 +291,8 @@ A sidebar panel (lightbulb icon in the action bar) that reads the project's `.cl
 | `F11` | Step Into (debug) |
 | `Shift+F11` | Step Out (debug) |
 | `Shift+F5` | Stop debugging |
+| `Ctrl+Space` | Trigger autocomplete (with auto-import) |
+| `Cmd+.` | Code actions / quick fixes |
 
 ---
 
@@ -398,7 +411,9 @@ Colors derived from the MojaveWare brand:
 | Editor | Monaco Editor 0.52 | Code editing, syntax highlighting, diff |
 | Terminal | xterm.js 5.5 | Terminal emulator |
 | PTY | node-pty 1.0 | Real shell backend |
-| LSP | Intelephense 1.16 | PHP language server |
+| PHP LSP | Intelephense 1.16 | PHP language server |
+| TS LSP | typescript-language-server 5.1 | TypeScript/JavaScript/React language server |
+| TypeScript | TypeScript 5.9 | TS compiler (used by TS LSP) |
 | Icons | material-file-icons 2.4 | File tree icons |
 | Build | electron-builder 25 | Packaging and distribution |
 
@@ -408,7 +423,7 @@ No additional runtime dependencies for database access (uses `mysql`/`psql` CLI)
 
 ## Known Limitations
 
-- LSP only supports PHP (Intelephense). Other languages get syntax highlighting but no autocomplete or diagnostics
+- LSP supports PHP (Intelephense) and TypeScript/JavaScript/React (typescript-language-server). Other languages get syntax highlighting but no autocomplete or diagnostics
 - No settings UI — tab size and other preferences are hardcoded (font size is adjustable via zoom)
 - Database viewer requires `mysql` or `psql` CLI installed locally
 
@@ -418,11 +433,29 @@ No additional runtime dependencies for database access (uses `mysql`/`psql` CLI)
 
 ### Planned
 - [ ] Settings/preferences UI
-- [ ] Multiple terminal instances
+- [ ] Vue SFC support (`.vue` files with `<template>`, `<script>`, `<style>` sections)
+- [ ] Tailwind CSS IntelliSense (class suggestions in `className` and `class` attributes)
 
 ---
 
 ## Changelog
+
+### v3.0.1
+
+- **Theme Flash Fix** — New windows open with the correct custom theme from the first frame. Uses `show: false` + IPC handshake (`theme:ready`) to prevent the dark theme flash on startup and new windows
+- **Sail vs Docker Detection Fix** — Projects with `vendor/bin/sail` as a Composer dependency but running under a parent Docker setup now correctly detect Docker exec instead of Sail. Searches all `docker-compose.yml` files upward and picks the first with valid `container_name` + volume mapping
+- **Split Editor Theme Fix** — Opening "Open as Text" from the .env viewer (or any split pane) no longer resets Monaco to the default dark theme. The right editor inherits the global theme instead of hardcoding `mojavecode-php-dark`
+- **Search Results Flash Fix** — Previous search results are cleared immediately when a new search starts, preventing stale results from shorter queries ("r", "rd") from showing before the final results ("rdx")
+- **Collapse All Search Results** — Button (`⊟`/`⊞`) in the search status bar to collapse/expand all file groups at once
+- **Collapse Folders** — Button in the FILES section header to collapse all expanded sub-folders while keeping root-level folders open. Reads chevron state directly from the DOM for reliable sync
+- **Zoom in Special Tabs** — Editor zoom (`Cmd+=`/`Cmd+-`) now scales Routes, Database, and Error Log tabs proportionally via CSS `zoom` variable (`--special-tab-zoom`)
+- **Multi-terminal** — Tab-based terminal with independent sessions. Each terminal has its own pty process and shell. Create (`+`), switch, and close (`×`) terminals from the internal tab bar. Command Palette entry "New Terminal"
+- **TypeScript Language Server** — Built-in `typescript-language-server` runs alongside Intelephense. Provides autocomplete, hover, go-to-definition, signature help, diagnostics, and rename for `.ts`, `.tsx`, `.js`, `.jsx` files
+- **Auto-import** — Accepting a completion item from `Ctrl+Space` automatically adds the `use` (PHP) or `import` (JS/TS) statement. Works via `additionalTextEdits` from both LSPs
+- **Code Actions** (`Cmd+.`) — Quick fixes and auto-import suggestions from Intelephense and the TypeScript language server. Lightbulb appears on errors/warnings with available fixes
+- **HTML Completions** — 50+ HTML5 tags, 30+ global attributes (including Alpine.js `x-data`/`x-show` and Livewire `wire:model`/`wire:click`), Emmet-style snippets, and auto-close tags. Works in `.html` and `.blade.php`
+- **Multi-window** (`Cmd+Shift+N`) — Opens a fully independent MojaveCode instance with its own LSP, terminals, debugger, and project state
+- **Custom Theme Monaco Fix** — Editor widgets (suggest, hover, peek view, find), gutter decorations, and error indicators now use custom theme colors instead of inheriting the default blue from `vs-dark`. 50+ editor colors defined per theme
 
 ### v3.0.0
 

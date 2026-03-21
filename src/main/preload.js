@@ -72,16 +72,17 @@ contextBridge.exposeInMainWorld('api', {
 
   // ── Pseudo-terminal (pty) ──
   ptySpawn: (cwd) => ipcRenderer.invoke('pty:spawn', cwd),
-  ptyWrite: (data) => ipcRenderer.send('pty:write', data),
-  ptyResize: (cols, rows) => ipcRenderer.send('pty:resize', { cols, rows }),
-  ptyCd: (cwd) => ipcRenderer.send('pty:cd', cwd),
-  ptyKill: () => ipcRenderer.invoke('pty:kill'),
+  ptyWrite: (id, data) => ipcRenderer.send('pty:write', id, data),
+  ptyResize: (id, cols, rows) => ipcRenderer.send('pty:resize', id, cols, rows),
+  ptyCd: (id, cwd) => ipcRenderer.send('pty:cd', id, cwd),
+  ptyKill: (id) => ipcRenderer.invoke('pty:kill', id),
+  ptyKillAll: () => ipcRenderer.invoke('pty:killAll'),
   onPtyData: (callback) => {
-    ipcRenderer.on('pty:data', (event, data) => callback(data));
+    ipcRenderer.on('pty:data', (event, id, data) => callback(id, data));
   },
   offPtyData: () => ipcRenderer.removeAllListeners('pty:data'),
   onPtyExit: (callback) => {
-    ipcRenderer.on('pty:exit', (event, code) => callback(code));
+    ipcRenderer.on('pty:exit', (event, id, code) => callback(id, code));
   },
   offPtyExit: () => ipcRenderer.removeAllListeners('pty:exit'),
 
@@ -89,6 +90,7 @@ contextBridge.exposeInMainWorld('api', {
   windowMinimize: () => ipcRenderer.send('window:minimize'),
   windowMaximize: () => ipcRenderer.send('window:maximize'),
   windowClose: () => ipcRenderer.send('window:close'),
+  windowNew: () => ipcRenderer.send('window:new'),
 
   // ── Menu events (main → renderer) ──
   onMenuSave: (callback) => ipcRenderer.on('menu:save', callback),
@@ -182,6 +184,15 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('lsp:notification', (event, message) => callback(message));
   },
 
+  // ── TS LSP (TypeScript / JavaScript / React) ──
+  tsLspStart: (workspaceFolder) => ipcRenderer.invoke('tsLsp:start', workspaceFolder),
+  tsLspStop: () => ipcRenderer.invoke('tsLsp:stop'),
+  tsLspRequest: (method, params) => ipcRenderer.invoke('tsLsp:request', method, params),
+  tsLspNotify: (method, params) => ipcRenderer.send('tsLsp:notify', method, params),
+  onTsLspNotification: (callback) => {
+    ipcRenderer.on('tsLsp:notification', (event, message) => callback(message));
+  },
+
   // ── PHP Format & PHPUnit ──
   findFile: (fileName) => ipcRenderer.invoke('fs:findFile', fileName),
   phpResolvePsr4: (filePath) => ipcRenderer.invoke('php:resolvePsr4', filePath),
@@ -269,6 +280,9 @@ contextBridge.exposeInMainWorld('api', {
   getFileIcon: (filename) => getIcon(filename).svg,
   syncTheme: (theme) => ipcRenderer.send('theme:sync', theme),
   syncCustomThemes: (themes) => ipcRenderer.send('theme:syncCustom', themes),
+  themeReady: () => ipcRenderer.send('theme:ready'),
+  getThemeConfig: () => ipcRenderer.invoke('theme:getConfig'),
+  saveThemeConfig: (config) => ipcRenderer.invoke('theme:saveConfig', config),
   onMenuGenerateTheme: (callback) => ipcRenderer.on('menu:generate-theme', callback),
   onMenuDeleteTheme: (callback) => {
     ipcRenderer.on('menu:delete-theme', (event, themeId) => callback(themeId));

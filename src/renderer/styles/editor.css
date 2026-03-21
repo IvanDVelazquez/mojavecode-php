@@ -81,6 +81,12 @@ body {
   overflow: hidden;
   height: 100vh;
   width: 100vw;
+  opacity: 0; /* Invisible hasta que el tema se aplique — evita flash del dark */
+}
+/* El renderer agrega .theme-ready tras aplicar el tema custom/light */
+body.theme-ready {
+  opacity: 1;
+  transition: opacity .08s ease-in;
   display: flex;
   flex-direction: column;
 }
@@ -306,6 +312,29 @@ body {
 
 .sidebar-section-header:hover {
   background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* Botón de acción en el header de sección (collapse tree, etc.)
+   Visible solo al hacer hover en el header */
+.tree-action-btn {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0 2px;
+  display: flex;
+  align-items: center;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.sidebar-section-header:hover .tree-action-btn {
+  opacity: 1;
+}
+
+.tree-action-btn:hover {
   color: var(--text-primary);
 }
 
@@ -611,8 +640,14 @@ body {
   border-color: var(--accent-blue);
 }
 
-#search-status {
+#search-status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   padding: 4px 12px;
+}
+
+#search-status {
   font-family: var(--font-ui);
   font-size: 11px;
   color: var(--text-muted);
@@ -1445,15 +1480,102 @@ body {
 }
 
 /* ─── TERMINAL (como tab) ─── */
+/* ════════════════════════════════════════════════════════════
+   MULTI-TERMINAL — Tabs internos, instancias apiladas
+   Cada terminal es un div .terminal-instance con su propio
+   xterm.js. La barra #terminal-tabs-bar permite crear (+),
+   cambiar, y cerrar (×) terminales individuales.
+   ════════════════════════════════════════════════════════════ */
+
 #terminal-container {
   flex: 1;
   background: var(--bg-terminal);
-  padding: 4px 8px;
   overflow: hidden;
+  display: none;
+  flex-direction: column;
+}
+
+/* ── Terminal tab bar ── */
+#terminal-tabs-bar {
+  display: flex;
+  align-items: center;
+  background: var(--bg-dark);
+  border-bottom: 1px solid var(--border);
+  height: 30px;
+  flex-shrink: 0;
+  padding: 0 4px;
+  gap: 2px;
+}
+
+#terminal-tabs {
+  display: flex;
+  flex: 1;
+  overflow-x: auto;
+  gap: 2px;
+}
+
+#terminal-tabs::-webkit-scrollbar { height: 0; }
+
+.terminal-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-family: var(--font-ui, system-ui);
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.1s, color 0.1s;
+}
+
+.terminal-tab:hover { background: var(--bg-hover); color: var(--text-primary); }
+.terminal-tab.active { background: var(--bg-active); color: var(--text-primary); }
+
+.terminal-tab-close {
+  font-size: 13px;
+  line-height: 1;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: none;
+  padding: 0 2px;
+}
+
+.terminal-tab:hover .terminal-tab-close { display: block; }
+.terminal-tab-close:hover { color: var(--accent-red); }
+
+#terminal-add-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+#terminal-add-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+/* ── Terminal instances container ── */
+#terminal-instances {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+
+.terminal-instance {
+  position: absolute;
+  inset: 0;
+  padding: 4px 8px;
   display: none;
 }
 
-#terminal-container .xterm { height: 100%; }
+.terminal-instance.active { display: block; }
+.terminal-instance .xterm { height: 100%; }
 
 /* ─── GIT GRAPH (como tab) ─── */
 #git-graph-container {
@@ -1944,6 +2066,7 @@ body {
   display: none;
   flex-direction: column;
   background: var(--bg-dark);
+  zoom: var(--special-tab-zoom, 1);
 }
 
 .errorlog-header {
@@ -2786,6 +2909,7 @@ body {
   overflow-y: auto;
   font-family: var(--font-ui);
   position: relative;
+  zoom: var(--special-tab-zoom, 1);
 }
 
 .db-loading {
@@ -3913,6 +4037,7 @@ body {
   background: var(--bg-darkest);
   overflow-y: auto;
   font-family: var(--font-ui);
+  zoom: var(--special-tab-zoom, 1);
 }
 
 .route-header {

@@ -83,6 +83,9 @@
           <div class="sidebar-section-header" data-section="files">
             <span class="sidebar-section-chevron">▾</span>
             <span class="sidebar-section-title">FILES</span>
+            <button id="btn-collapse-tree" class="tree-action-btn" title="Collapse Folders">
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M9 9H4v1h5V9zm0-4H7v1h3l-1-1zm2.6 2H14V6h-2l-.3.1-1.7 1.7V5.5l-1-1L7.5 3H2v10h5v-1H3V4h4.2l2.3 2.3V9l2.1-2z"/></svg>
+            </button>
           </div>
           <div class="sidebar-section-body" id="file-tree">
             <div id="file-tree-empty">
@@ -113,7 +116,10 @@
             <button id="search-opt-regex" class="search-opt-btn" title="Use Regular Expression">.*</button>
           </div>
         </div>
-        <div id="search-status"></div>
+        <div id="search-status-bar">
+          <span id="search-status"></span>
+          <button id="search-collapse-all" class="search-opt-btn" title="Collapse/Expand All">⊟</button>
+        </div>
         <div id="search-results"></div>
       </div>
 
@@ -262,7 +268,13 @@
         <div id="editor-container"></div>
 
         <!-- TERMINAL CONTAINER (se muestra como tab) -->
-        <div id="terminal-container"></div>
+        <div id="terminal-container">
+          <div id="terminal-tabs-bar">
+            <div id="terminal-tabs"></div>
+            <button id="terminal-add-btn" title="New Terminal">+</button>
+          </div>
+          <div id="terminal-instances"></div>
+        </div>
 
         <!-- GIT GRAPH CONTAINER (se muestra como tab) -->
         <div id="git-graph-container"></div>

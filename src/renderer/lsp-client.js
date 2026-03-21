@@ -181,6 +181,19 @@ function lspUntrackModel(model) {
   }
 }
 
+/**
+ * Convierte additionalTextEdits del LSP (auto-imports) a formato Monaco.
+ * El LSP manda edits como { range, newText } — Monaco espera { range, text }
+ * con posiciones 1-based.
+ */
+function _mapAdditionalEdits(edits) {
+  if (!edits || !Array.isArray(edits) || edits.length === 0) return undefined;
+  return edits.map((e) => ({
+    range: lspToMonacoRange(e.range),
+    text: e.newText,
+  }));
+}
+
 // ┌──────────────────────────────────────────────────┐
 // │  MONACO PROVIDERS — Autocompletado, Hover, etc.  │
 // └──────────────────────────────────────────────────┘
@@ -227,6 +240,7 @@ function initLspProviders() {
               sortText: item.sortText,
               filterText: item.filterText,
               range: item.textEdit?.range ? lspToMonacoRange(item.textEdit.range) : range,
+              additionalTextEdits: _mapAdditionalEdits(item.additionalTextEdits),
               _lspItem: item, // Guardar para resolve
             };
             return suggestion;
@@ -250,6 +264,10 @@ function initLspProviders() {
         }
         if (resolved?.detail) {
           item.detail = resolved.detail;
+        }
+        // Auto-import: el LSP puede devolver additionalTextEdits en resolve
+        if (resolved?.additionalTextEdits) {
+          item.additionalTextEdits = _mapAdditionalEdits(resolved.additionalTextEdits);
         }
       } catch (err) {
         // Silencioso — resolve es opcional
@@ -510,6 +528,49 @@ function initLspProviders() {
     },
   });
 
+  // ── CODE ACTIONS (auto-import, quick fixes) ──
+  //
+  // Cuando el cursor está sobre un error/warning, Monaco muestra el
+  // lightbulb (💡). Al hacer click o Cmd+., se piden code actions al
+  // LSP que pueden incluir auto-imports, quick fixes, refactors, etc.
+  monaco.languages.registerCodeActionProvider('php', {
+    async provideCodeActions(model, range, context) {
+      if (!lspState.ready) return { actions: [], dispose: () => {} };
+
+      const uri = model.uri.toString();
+
+      // Convertir markers de Monaco a diagnostics LSP para mandar al servidor
+      const diagnostics = (context.markers || []).map((m) => ({
+        range: {
+          start: { line: m.startLineNumber - 1, character: m.startColumn - 1 },
+          end: { line: m.endLineNumber - 1, character: m.endColumn - 1 },
+        },
+        message: m.message,
+        severity: m.severity === monaco.MarkerSeverity.Error ? 1
+          : m.severity === monaco.MarkerSeverity.Warning ? 2
+          : m.severity === monaco.MarkerSeverity.Info ? 3 : 4,
+        code: m.code,
+        source: m.source,
+      }));
+
+      try {
+        const result = await window.api.lspRequest('textDocument/codeAction', {
+          textDocument: { uri },
+          range: {
+            start: monacoToLspPosition({ lineNumber: range.startLineNumber, column: range.startColumn }),
+            end: monacoToLspPosition({ lineNumber: range.endLineNumber, column: range.endColumn }),
+          },
+          context: { diagnostics },
+        });
+
+        if (!result || !Array.isArray(result)) return { actions: [], dispose: () => {} };
+
+        const actions = result.map((action) => _lspCodeActionToMonaco(action, model, 'lsp')).filter(Boolean);
+        return { actions, dispose: () => {} };
+      } catch { return { actions: [], dispose: () => {} }; }
+    },
+  });
+
   // ── DIAGNOSTICS (notificaciones del servidor) ──
   window.api.onLspNotification((message) => {
     if (message.method === 'textDocument/publishDiagnostics') {
@@ -532,6 +593,379 @@ function initLspProviders() {
       }
     }
   });
+}
+
+// ┌──────────────────────────────────────────────────┐
+// │  CODE ACTION HELPERS                             │
+// │  Convierte LSP CodeActions a formato Monaco.     │
+// │  Soporta workspace edits (auto-import) y        │
+// │  command-based actions.                          │
+// └──────────────────────────────────────────────────┘
+
+/**
+ * Convierte un LSP CodeAction a un Monaco CodeAction.
+ * Soporta WorkspaceEdit (changes y documentChanges) para auto-imports.
+ *
+ * @param {object} action - LSP CodeAction
+ * @param {object} model - Monaco model activo
+ * @param {string} lspChannel - 'lsp' o 'tsLsp' para resolver actions lazy
+ * @returns {object|null} Monaco CodeAction
+ */
+function _lspCodeActionToMonaco(action, model, lspChannel) {
+  if (!action) return null;
+
+  // Si es un Command (sin edit), solo tiene title
+  if (!action.edit && action.command) {
+    return {
+      title: action.title,
+      kind: action.kind || 'quickfix',
+      command: {
+        id: action.command.command,
+        title: action.command.title || action.title,
+        arguments: action.command.arguments,
+      },
+    };
+  }
+
+  // WorkspaceEdit → Monaco edits
+  const monacoEdits = [];
+
+  if (action.edit) {
+    // Formato "changes": { uri: TextEdit[] }
+    if (action.edit.changes) {
+      for (const [uri, textEdits] of Object.entries(action.edit.changes)) {
+        const resource = monaco.Uri.parse(uri);
+
+        // Pre-crear modelos para archivos no abiertos
+        if (!monaco.editor.getModel(resource)) {
+          try {
+            // No bloquear — el edit se aplica al model que crearemos
+            window.api.readFile(resource.path).then((fileResult) => {
+              if (!fileResult.error && !monaco.editor.getModel(resource)) {
+                const ext = resource.path.split('.').pop();
+                monaco.editor.createModel(fileResult.content, getMonacoLanguage(ext), resource);
+              }
+            });
+          } catch { /* silent */ }
+        }
+
+        for (const edit of textEdits) {
+          monacoEdits.push({
+            resource,
+            textEdit: {
+              range: lspToMonacoRange(edit.range),
+              text: edit.newText,
+            },
+          });
+        }
+      }
+    }
+
+    // Formato "documentChanges": TextDocumentEdit[]
+    if (action.edit.documentChanges) {
+      for (const docChange of action.edit.documentChanges) {
+        if (!docChange.textDocument || !docChange.edits) continue;
+        const resource = monaco.Uri.parse(docChange.textDocument.uri);
+        for (const edit of docChange.edits) {
+          monacoEdits.push({
+            resource,
+            textEdit: {
+              range: lspToMonacoRange(edit.range),
+              text: edit.newText,
+            },
+          });
+        }
+      }
+    }
+  }
+
+  if (monacoEdits.length === 0 && !action.command) return null;
+
+  return {
+    title: action.title,
+    kind: action.kind || 'quickfix',
+    edit: monacoEdits.length > 0 ? { edits: monacoEdits } : undefined,
+    isPreferred: action.isPreferred || false,
+  };
+}
+
+// ┌──────────────────────────────────────────────────┐
+// │  HTML TAG COMPLETIONS — Tags y atributos HTML5  │
+// │  Para archivos .html y .blade.php               │
+// └──────────────────────────────────────────────────┘
+function initHtmlCompletions() {
+  // Tags con sus atributos más comunes y si son self-closing
+  const tags = [
+    // Document
+    { tag: 'html', attrs: 'lang="${1:en}"', body: true },
+    { tag: 'head', body: true }, { tag: 'body', body: true },
+    { tag: 'title', body: true }, { tag: 'meta', attrs: '${1|charset,name,content,http-equiv|}="${2}"' },
+    { tag: 'link', attrs: 'rel="${1:stylesheet}" href="${2}"' },
+    { tag: 'script', attrs: '${1:src="${2}"}', body: true },
+    { tag: 'style', body: true }, { tag: 'base', attrs: 'href="${1}"' },
+    // Sections
+    { tag: 'div', body: true }, { tag: 'span', body: true },
+    { tag: 'section', body: true }, { tag: 'article', body: true },
+    { tag: 'aside', body: true }, { tag: 'header', body: true },
+    { tag: 'footer', body: true }, { tag: 'nav', body: true },
+    { tag: 'main', body: true },
+    // Headings
+    { tag: 'h1', body: true }, { tag: 'h2', body: true }, { tag: 'h3', body: true },
+    { tag: 'h4', body: true }, { tag: 'h5', body: true }, { tag: 'h6', body: true },
+    // Text
+    { tag: 'p', body: true }, { tag: 'a', attrs: 'href="${1:#}"', body: true },
+    { tag: 'strong', body: true }, { tag: 'em', body: true },
+    { tag: 'small', body: true }, { tag: 'br' }, { tag: 'hr' },
+    { tag: 'pre', body: true }, { tag: 'code', body: true },
+    { tag: 'blockquote', body: true },
+    // Lists
+    { tag: 'ul', body: true }, { tag: 'ol', body: true }, { tag: 'li', body: true },
+    { tag: 'dl', body: true }, { tag: 'dt', body: true }, { tag: 'dd', body: true },
+    // Table
+    { tag: 'table', body: true }, { tag: 'thead', body: true },
+    { tag: 'tbody', body: true }, { tag: 'tfoot', body: true },
+    { tag: 'tr', body: true }, { tag: 'th', body: true }, { tag: 'td', body: true },
+    // Forms
+    { tag: 'form', attrs: 'action="${1}" method="${2|GET,POST|}"', body: true },
+    { tag: 'input', attrs: 'type="${1|text,password,email,number,checkbox,radio,file,hidden,submit,date,tel,url|}" name="${2}"' },
+    { tag: 'textarea', attrs: 'name="${1}" rows="${2:4}"', body: true },
+    { tag: 'select', attrs: 'name="${1}"', body: true },
+    { tag: 'option', attrs: 'value="${1}"', body: true },
+    { tag: 'button', attrs: 'type="${1|submit,button,reset|}"', body: true },
+    { tag: 'label', attrs: 'for="${1}"', body: true },
+    { tag: 'fieldset', body: true }, { tag: 'legend', body: true },
+    // Media
+    { tag: 'img', attrs: 'src="${1}" alt="${2}"' },
+    { tag: 'video', attrs: 'src="${1}" controls', body: true },
+    { tag: 'audio', attrs: 'src="${1}" controls', body: true },
+    { tag: 'source', attrs: 'src="${1}" type="${2}"' },
+    { tag: 'picture', body: true }, { tag: 'canvas', body: true },
+    { tag: 'svg', attrs: 'viewBox="${1:0 0 24 24}"', body: true },
+    { tag: 'iframe', attrs: 'src="${1}" width="${2}" height="${3}"' },
+    // Interactive
+    { tag: 'details', body: true }, { tag: 'summary', body: true },
+    { tag: 'dialog', body: true },
+    // Other
+    { tag: 'template', body: true }, { tag: 'slot', body: true },
+    { tag: 'figure', body: true }, { tag: 'figcaption', body: true },
+    { tag: 'mark', body: true }, { tag: 'time', body: true },
+    { tag: 'progress', attrs: 'value="${1}" max="${2:100}"' },
+    { tag: 'output', body: true },
+  ];
+
+  // Atributos globales HTML
+  const globalAttrs = [
+    { attr: 'class', insert: 'class="${1}"' },
+    { attr: 'id', insert: 'id="${1}"' },
+    { attr: 'style', insert: 'style="${1}"' },
+    { attr: 'title', insert: 'title="${1}"' },
+    { attr: 'hidden', insert: 'hidden' },
+    { attr: 'data-', insert: 'data-${1}="${2}"' },
+    { attr: 'aria-label', insert: 'aria-label="${1}"' },
+    { attr: 'aria-hidden', insert: 'aria-hidden="${1|true,false|}"' },
+    { attr: 'role', insert: 'role="${1}"' },
+    { attr: 'tabindex', insert: 'tabindex="${1:0}"' },
+    // Events
+    { attr: 'onclick', insert: 'onclick="${1}"' },
+    { attr: 'onchange', insert: 'onchange="${1}"' },
+    { attr: 'onsubmit', insert: 'onsubmit="${1}"' },
+    { attr: 'onkeydown', insert: 'onkeydown="${1}"' },
+    // Alpine.js (common in Laravel)
+    { attr: 'x-data', insert: 'x-data="${1:{}}"' },
+    { attr: 'x-show', insert: 'x-show="${1}"' },
+    { attr: 'x-if', insert: 'x-if="${1}"' },
+    { attr: 'x-for', insert: 'x-for="${1:item} in ${2:items}"' },
+    { attr: 'x-on:', insert: 'x-on:${1:click}="${2}"' },
+    { attr: 'x-bind:', insert: 'x-bind:${1:class}="${2}"' },
+    { attr: 'x-model', insert: 'x-model="${1}"' },
+    { attr: 'x-text', insert: 'x-text="${1}"' },
+    // Livewire
+    { attr: 'wire:model', insert: 'wire:model="${1}"' },
+    { attr: 'wire:click', insert: 'wire:click="${1}"' },
+    { attr: 'wire:submit', insert: 'wire:submit="${1}"' },
+    { attr: 'wire:loading', insert: 'wire:loading' },
+  ];
+
+  // Emmet-style snippets
+  const emmetSnippets = [
+    { label: '!', insert: '<!DOCTYPE html>\n<html lang="${1:en}">\n<head>\n\t<meta charset="UTF-8">\n\t<meta name="viewport" content="width=device-width, initial-scale=1.0">\n\t<title>${2:Document}</title>\n</head>\n<body>\n\t$0\n</body>\n</html>', doc: 'HTML5 boilerplate' },
+    { label: 'div.class', insert: '<div class="${1}">\n\t$0\n</div>', doc: 'div with class' },
+    { label: 'div#id', insert: '<div id="${1}">\n\t$0\n</div>', doc: 'div with id' },
+    { label: 'ul>li', insert: '<ul>\n\t<li>$0</li>\n</ul>', doc: 'Unordered list with item' },
+    { label: 'ol>li', insert: '<ol>\n\t<li>$0</li>\n</ol>', doc: 'Ordered list with item' },
+    { label: 'table>tr>td', insert: '<table>\n\t<tr>\n\t\t<td>$0</td>\n\t</tr>\n</table>', doc: 'Table with row and cell' },
+    { label: 'a:link', insert: '<a href="${1:#}">${2:link}</a>', doc: 'Anchor link' },
+    { label: 'a:mail', insert: '<a href="mailto:${1}">${2:email}</a>', doc: 'Email link' },
+    { label: 'img:src', insert: '<img src="${1}" alt="${2}">', doc: 'Image' },
+    { label: 'input:text', insert: '<input type="text" name="${1}" placeholder="${2}">', doc: 'Text input' },
+    { label: 'input:email', insert: '<input type="email" name="${1}" placeholder="${2}">', doc: 'Email input' },
+    { label: 'input:password', insert: '<input type="password" name="${1}">', doc: 'Password input' },
+    { label: 'input:checkbox', insert: '<input type="checkbox" name="${1}" id="${2}">', doc: 'Checkbox' },
+    { label: 'input:radio', insert: '<input type="radio" name="${1}" value="${2}">', doc: 'Radio button' },
+    { label: 'input:hidden', insert: '<input type="hidden" name="${1}" value="${2}">', doc: 'Hidden input' },
+    { label: 'input:submit', insert: '<input type="submit" value="${1:Submit}">', doc: 'Submit button' },
+    { label: 'btn', insert: '<button type="${1|button,submit|}">${2:Click}</button>', doc: 'Button' },
+    { label: 'link:css', insert: '<link rel="stylesheet" href="${1:styles.css}">', doc: 'CSS link' },
+    { label: 'script:src', insert: '<script src="${1}"></script>', doc: 'Script tag with src' },
+    { label: 'meta:vp', insert: '<meta name="viewport" content="width=device-width, initial-scale=1.0">', doc: 'Viewport meta' },
+  ];
+
+  for (const lang of ['html', 'php']) {
+    // Tag completions — trigger on <
+    monaco.languages.registerCompletionItemProvider(lang, {
+      triggerCharacters: ['<'],
+      provideCompletionItems(model, position) {
+        // En PHP, solo ofrecer HTML completions en archivos .blade.php o .html
+        if (lang === 'php' && !model.uri.path.includes('.blade.php')) {
+          return { suggestions: [] };
+        }
+
+        const line = model.getLineContent(position.lineNumber);
+        const before = line.substring(0, position.column - 1);
+        // Solo sugerir tags después de < (no dentro de atributos)
+        if (!before.match(/<\w*$/)) return { suggestions: [] };
+
+        const word = model.getWordUntilPosition(position);
+        const range = {
+          startLineNumber: position.lineNumber, startColumn: word.startColumn,
+          endLineNumber: position.lineNumber, endColumn: word.endColumn,
+        };
+
+        return {
+          suggestions: tags.map((t) => {
+            const insert = t.body
+              ? (t.attrs ? `${t.tag} ${t.attrs}>\n\t$0\n</${t.tag}>` : `${t.tag}>\n\t$0\n</${t.tag}>`)
+              : (t.attrs ? `${t.tag} ${t.attrs}>` : `${t.tag}>`);
+            return {
+              label: t.tag,
+              kind: monaco.languages.CompletionItemKind.Property,
+              insertText: insert,
+              insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+              detail: t.body ? `<${t.tag}>...</${t.tag}>` : `<${t.tag}>`,
+              range,
+              sortText: '0' + t.tag,
+            };
+          }),
+        };
+      },
+    });
+
+    // Attribute completions — trigger on space inside a tag
+    monaco.languages.registerCompletionItemProvider(lang, {
+      triggerCharacters: [' '],
+      provideCompletionItems(model, position) {
+        if (lang === 'php' && !model.uri.path.includes('.blade.php')) {
+          return { suggestions: [] };
+        }
+
+        const line = model.getLineContent(position.lineNumber);
+        const before = line.substring(0, position.column - 1);
+        // Verificar que estamos dentro de un tag abierto (hay < sin > cerrado)
+        const lastOpen = before.lastIndexOf('<');
+        const lastClose = before.lastIndexOf('>');
+        if (lastOpen === -1 || lastClose > lastOpen) return { suggestions: [] };
+
+        const word = model.getWordUntilPosition(position);
+        const range = {
+          startLineNumber: position.lineNumber, startColumn: word.startColumn,
+          endLineNumber: position.lineNumber, endColumn: word.endColumn,
+        };
+
+        return {
+          suggestions: globalAttrs.map((a) => ({
+            label: a.attr,
+            kind: monaco.languages.CompletionItemKind.Field,
+            insertText: a.insert,
+            insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+            range,
+          })),
+        };
+      },
+    });
+
+    // Emmet-style snippets
+    monaco.languages.registerCompletionItemProvider(lang, {
+      provideCompletionItems(model, position) {
+        if (lang === 'php' && !model.uri.path.includes('.blade.php')) {
+          return { suggestions: [] };
+        }
+
+        const word = model.getWordUntilPosition(position);
+        const range = {
+          startLineNumber: position.lineNumber, startColumn: word.startColumn,
+          endLineNumber: position.lineNumber, endColumn: word.endColumn,
+        };
+
+        return {
+          suggestions: emmetSnippets.map((s) => ({
+            label: s.label,
+            kind: monaco.languages.CompletionItemKind.Snippet,
+            insertText: s.insert,
+            insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+            documentation: { value: s.doc },
+            range,
+            sortText: '1' + s.label,
+          })),
+        };
+      },
+    });
+
+    // Auto-close tags — trigger on /
+    monaco.languages.registerCompletionItemProvider(lang, {
+      triggerCharacters: ['/'],
+      provideCompletionItems(model, position) {
+        if (lang === 'php' && !model.uri.path.includes('.blade.php')) {
+          return { suggestions: [] };
+        }
+
+        const line = model.getLineContent(position.lineNumber);
+        const before = line.substring(0, position.column - 1);
+        // Detectar </ para auto-cerrar el tag más reciente
+        if (!before.endsWith('</')) return { suggestions: [] };
+
+        // Buscar el último tag abierto sin cerrar
+        const textBefore = model.getValueInRange({
+          startLineNumber: Math.max(1, position.lineNumber - 50),
+          startColumn: 1,
+          endLineNumber: position.lineNumber,
+          endColumn: position.column,
+        });
+
+        const openTags = [];
+        const selfClosing = new Set(['br','hr','img','input','meta','link','source','base','area','col','embed','track','wbr']);
+        const tagRegex = /<\/?([a-zA-Z][a-zA-Z0-9-]*)/g;
+        let m;
+        while ((m = tagRegex.exec(textBefore)) !== null) {
+          if (m[0].startsWith('</')) {
+            // Closing tag — pop matching open
+            const idx = openTags.lastIndexOf(m[1].toLowerCase());
+            if (idx !== -1) openTags.splice(idx, 1);
+          } else if (!selfClosing.has(m[1].toLowerCase())) {
+            openTags.push(m[1].toLowerCase());
+          }
+        }
+
+        if (openTags.length === 0) return { suggestions: [] };
+
+        const lastTag = openTags[openTags.length - 1];
+        const range = {
+          startLineNumber: position.lineNumber, startColumn: position.column,
+          endLineNumber: position.lineNumber, endColumn: position.column,
+        };
+
+        return {
+          suggestions: [{
+            label: `/${lastTag}>`,
+            kind: monaco.languages.CompletionItemKind.Property,
+            insertText: `${lastTag}>`,
+            range,
+            sortText: '0',
+            preselect: true,
+          }],
+        };
+      },
+    });
+  }
 }
 
 // ┌──────────────────────────────────────────────────┐
@@ -693,7 +1127,7 @@ async function startLsp(workspaceFolder) {
 }
 
 /**
- * Detener el LSP.
+ * Detener el LSP de PHP.
  */
 async function stopLsp() {
   lspState.ready = false;
@@ -703,6 +1137,44 @@ async function stopLsp() {
   }
   lspState.changeListeners.clear();
   await window.api.lspStop();
+}
+
+/**
+ * Iniciar el TS LSP para un workspace.
+ * Se llama cuando se abre una carpeta que tiene archivos TS/JS.
+ */
+async function startTsLsp(workspaceFolder) {
+  const result = await window.api.tsLspStart(workspaceFolder);
+  if (result.error) {
+    console.warn('[tsLsp] Failed to start:', result.error);
+    tsLspState.ready = false;
+    return;
+  }
+
+  tsLspState.ready = true;
+  console.log('[tsLsp] TypeScript language server ready');
+
+  // Trackear archivos TS/JS que ya estén abiertos
+  if (typeof state !== 'undefined' && state.openTabs) {
+    for (const tab of state.openTabs) {
+      if (tab.model && isTsFile(tab.path)) {
+        tsLspTrackModel(tab.model);
+      }
+    }
+  }
+}
+
+/**
+ * Detener el TS LSP.
+ */
+async function stopTsLsp() {
+  tsLspState.ready = false;
+  tsLspState.documentVersions.clear();
+  for (const [uri, disposable] of tsLspState.changeListeners) {
+    disposable.dispose();
+  }
+  tsLspState.changeListeners.clear();
+  await window.api.tsLspStop();
 }
 
 // ┌──────────────────────────────────────────────────┐
@@ -862,7 +1334,357 @@ function initPhpSmartSnippets() {
   });
 }
 
+// ┌──────────────────────────────────────────────────┐
+// │  TS/JS LSP CLIENT — TypeScript, JavaScript,     │
+// │  React (JSX/TSX). Segundo servidor LSP que      │
+// │  convive con Intelephense, usando canal IPC     │
+// │  separado (tsLsp:*).                            │
+// └──────────────────────────────────────────────────┘
+
+const tsLspState = {
+  ready: false,
+  documentVersions: new Map(),
+  changeListeners: new Map(),
+};
+
+// Monaco solo reconoce 'typescript' y 'javascript' como lenguajes.
+// JSX/TSX usan esos mismos lenguajes para tokenización, pero el TS LSP
+// recibe el languageId correcto (typescriptreact/javascriptreact) via tsLanguageId().
+const TS_LANGUAGES = ['typescript', 'javascript'];
+const TS_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.mts', '.cjs', '.cts']);
+
+/**
+ * Mapea extensión de archivo al languageId que espera el TS LSP.
+ */
+function tsLanguageId(filePath) {
+  if (filePath.endsWith('.tsx')) return 'typescriptreact';
+  if (filePath.endsWith('.jsx')) return 'javascriptreact';
+  if (filePath.endsWith('.ts') || filePath.endsWith('.mts') || filePath.endsWith('.cts')) return 'typescript';
+  return 'javascript';
+}
+
+function isTsFile(filePath) {
+  const ext = filePath.slice(filePath.lastIndexOf('.'));
+  return TS_EXTENSIONS.has(ext);
+}
+
+// ── TS Document Sync ─────────────────────────────────────────
+// Misma lógica que el PHP sync pero usando el canal tsLsp:*.
+// Notifica al typescript-language-server de aperturas, cambios,
+// cierres y guardados de archivos TS/JS/JSX/TSX.
+
+/** Notifica al TS LSP que un archivo fue abierto. */
+function tsLspDidOpen(uri, languageId, content) {
+  if (!tsLspState.ready) return;
+  tsLspState.documentVersions.set(uri, 1);
+  window.api.tsLspNotify('textDocument/didOpen', {
+    textDocument: { uri, languageId, version: 1, text: content },
+  });
+}
+
+/** Notifica al TS LSP que el contenido de un archivo cambió. */
+function tsLspDidChange(uri, content) {
+  if (!tsLspState.ready) return;
+  const version = (tsLspState.documentVersions.get(uri) || 0) + 1;
+  tsLspState.documentVersions.set(uri, version);
+  window.api.tsLspNotify('textDocument/didChange', {
+    textDocument: { uri, version },
+    contentChanges: [{ text: content }],
+  });
+}
+
+/** Notifica al TS LSP que un archivo fue cerrado. Limpia markers. */
+function tsLspDidClose(uri) {
+  if (!tsLspState.ready) return;
+  tsLspState.documentVersions.delete(uri);
+  window.api.tsLspNotify('textDocument/didClose', { textDocument: { uri } });
+  const disposable = tsLspState.changeListeners.get(uri);
+  if (disposable) { disposable.dispose(); tsLspState.changeListeners.delete(uri); }
+  const model = monaco.editor.getModel(monaco.Uri.parse(uri));
+  if (model) monaco.editor.setModelMarkers(model, 'typescript', []);
+}
+
+/** Notifica al TS LSP que un archivo fue guardado. */
+function tsLspDidSave(uri, content) {
+  if (!tsLspState.ready) return;
+  window.api.tsLspNotify('textDocument/didSave', { textDocument: { uri }, text: content });
+}
+
+/**
+ * Registrar un modelo TS/JS para sync con el TS LSP.
+ */
+function tsLspTrackModel(model) {
+  if (!tsLspState.ready) return;
+  const filePath = model.uri.path;
+  if (!isTsFile(filePath)) return;
+
+  const uri = model.uri.toString();
+  tsLspDidOpen(uri, tsLanguageId(filePath), model.getValue());
+
+  const disposable = model.onDidChangeContent(() => {
+    tsLspDidChange(uri, model.getValue());
+  });
+  tsLspState.changeListeners.set(uri, disposable);
+}
+
+function tsLspUntrackModel(model) {
+  if (!model) return;
+  const uri = model.uri.toString();
+  if (tsLspState.documentVersions.has(uri)) {
+    tsLspDidClose(uri);
+  }
+}
+
+/**
+ * Registra providers de Monaco para TypeScript/JavaScript/React.
+ * Misma estructura que los PHP providers pero usando tsLsp IPC.
+ */
+function initTsLspProviders() {
+  for (const lang of TS_LANGUAGES) {
+    // ── COMPLETION ──
+    monaco.languages.registerCompletionItemProvider(lang, {
+      triggerCharacters: ['.', '/', '<', '"', "'", '`', '@'],
+      async provideCompletionItems(model, position) {
+        if (!tsLspState.ready) return { suggestions: [] };
+        try {
+          const response = await window.api.tsLspRequest('textDocument/completion', {
+            textDocument: { uri: model.uri.toString() },
+            position: monacoToLspPosition(position),
+          });
+          if (!response) return { suggestions: [] };
+          const items = response.items || response;
+          if (!Array.isArray(items)) return { suggestions: [] };
+          const word = model.getWordUntilPosition(position);
+          const range = {
+            startLineNumber: position.lineNumber, startColumn: word.startColumn,
+            endLineNumber: position.lineNumber, endColumn: word.endColumn,
+          };
+          return {
+            suggestions: items.map((item) => ({
+              label: item.label,
+              kind: mapCompletionKind(item.kind),
+              insertText: item.textEdit?.newText || item.insertText || item.label,
+              insertTextRules: item.insertTextFormat === 2
+                ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet : undefined,
+              detail: item.detail || '',
+              documentation: item.documentation
+                ? { value: item.documentation.value || item.documentation } : undefined,
+              sortText: item.sortText,
+              filterText: item.filterText,
+              range: item.textEdit?.range ? lspToMonacoRange(item.textEdit.range) : range,
+              additionalTextEdits: _mapAdditionalEdits(item.additionalTextEdits),
+              _lspItem: item,
+            })),
+          };
+        } catch { return { suggestions: [] }; }
+      },
+      async resolveCompletionItem(item) {
+        if (!tsLspState.ready || !item._lspItem) return item;
+        try {
+          const resolved = await window.api.tsLspRequest('completionItem/resolve', item._lspItem);
+          if (resolved?.documentation) item.documentation = { value: resolved.documentation.value || String(resolved.documentation) };
+          if (resolved?.detail) item.detail = resolved.detail;
+          if (resolved?.additionalTextEdits) item.additionalTextEdits = _mapAdditionalEdits(resolved.additionalTextEdits);
+        } catch { /* resolve is optional */ }
+        return item;
+      },
+    });
+
+    // ── HOVER ──
+    monaco.languages.registerHoverProvider(lang, {
+      async provideHover(model, position) {
+        if (!tsLspState.ready) return null;
+        try {
+          const response = await window.api.tsLspRequest('textDocument/hover', {
+            textDocument: { uri: model.uri.toString() },
+            position: monacoToLspPosition(position),
+          });
+          if (!response || !response.contents) return null;
+          let contents;
+          if (typeof response.contents === 'string') contents = [{ value: response.contents }];
+          else if (response.contents.value) contents = [{ value: response.contents.value }];
+          else if (Array.isArray(response.contents)) contents = response.contents.map(c => typeof c === 'string' ? { value: c } : { value: c.value || String(c) });
+          else contents = [{ value: String(response.contents) }];
+          return { contents, range: response.range ? lspToMonacoRange(response.range) : undefined };
+        } catch { return null; }
+      },
+    });
+
+    // ── GO TO DEFINITION ──
+    monaco.languages.registerDefinitionProvider(lang, {
+      async provideDefinition(model, position) {
+        if (!tsLspState.ready) return null;
+        try {
+          const response = await window.api.tsLspRequest('textDocument/definition', {
+            textDocument: { uri: model.uri.toString() },
+            position: monacoToLspPosition(position),
+          });
+          if (!response) return null;
+          const locations = Array.isArray(response) ? response : [response];
+          for (const loc of locations) {
+            const locUri = monaco.Uri.parse(loc.uri);
+            if (!monaco.editor.getModel(locUri)) {
+              try {
+                const fileResult = await window.api.readFile(locUri.path);
+                if (!fileResult.error) {
+                  const ext = locUri.path.split('.').pop();
+                  const langId = getMonacoLanguage(ext);
+                  monaco.editor.createModel(fileResult.content, langId, locUri);
+                }
+              } catch { /* silent */ }
+            }
+          }
+          return locations.map(loc => ({ uri: monaco.Uri.parse(loc.uri), range: lspToMonacoRange(loc.range) }));
+        } catch { return null; }
+      },
+    });
+
+    // ── SIGNATURE HELP ──
+    monaco.languages.registerSignatureHelpProvider(lang, {
+      signatureHelpTriggerCharacters: ['(', ',', '<'],
+      async provideSignatureHelp(model, position) {
+        if (!tsLspState.ready) return null;
+        try {
+          const response = await window.api.tsLspRequest('textDocument/signatureHelp', {
+            textDocument: { uri: model.uri.toString() },
+            position: monacoToLspPosition(position),
+          });
+          if (!response || !response.signatures?.length) return null;
+          return {
+            value: {
+              signatures: response.signatures.map(sig => ({
+                label: sig.label,
+                documentation: sig.documentation ? { value: sig.documentation.value || sig.documentation } : undefined,
+                parameters: (sig.parameters || []).map(p => ({
+                  label: p.label,
+                  documentation: p.documentation ? { value: p.documentation.value || p.documentation } : undefined,
+                })),
+              })),
+              activeSignature: response.activeSignature || 0,
+              activeParameter: response.activeParameter || 0,
+            },
+            dispose: () => {},
+          };
+        } catch { return null; }
+      },
+    });
+
+    // ── RENAME ──
+    monaco.languages.registerRenameProvider(lang, {
+      async resolveRenameLocation(model, position) {
+        if (!tsLspState.ready) return null;
+        try {
+          const response = await window.api.tsLspRequest('textDocument/prepareRename', {
+            textDocument: { uri: model.uri.toString() },
+            position: monacoToLspPosition(position),
+          });
+          if (response) {
+            const range = response.range ? lspToMonacoRange(response.range) : lspToMonacoRange(response);
+            return { range, text: response.placeholder || model.getValueInRange(range) };
+          }
+        } catch { /* fallback */ }
+        const wordInfo = model.getWordAtPosition(position);
+        if (!wordInfo) return { text: '', range: new monaco.Range(1,1,1,1), rejectReason: 'No symbol at cursor' };
+        return { text: wordInfo.word, range: new monaco.Range(position.lineNumber, wordInfo.startColumn, position.lineNumber, wordInfo.endColumn) };
+      },
+      async provideRenameEdits(model, position, newName) {
+        if (!tsLspState.ready) return null;
+        try {
+          const response = await window.api.tsLspRequest('textDocument/rename', {
+            textDocument: { uri: model.uri.toString() },
+            position: monacoToLspPosition(position),
+            newName,
+          });
+          if (!response || !response.changes) return null;
+          const edits = [];
+          let totalEdits = 0, fileCount = 0;
+          for (const [uri, textEdits] of Object.entries(response.changes)) {
+            fileCount++;
+            const resource = monaco.Uri.parse(uri);
+            if (!monaco.editor.getModel(resource)) {
+              try {
+                const fileResult = await window.api.readFile(resource.path);
+                if (!fileResult.error) {
+                  const ext = resource.path.split('.').pop();
+                  monaco.editor.createModel(fileResult.content, getMonacoLanguage(ext), resource);
+                }
+              } catch { /* silent */ }
+            }
+            for (const edit of textEdits) {
+              totalEdits++;
+              edits.push({ resource, textEdit: { range: lspToMonacoRange(edit.range), text: edit.newText } });
+            }
+          }
+          if (typeof showRenameInfo === 'function') showRenameInfo(fileCount, totalEdits, newName);
+          return { edits };
+        } catch { return null; }
+      },
+    });
+  }
+
+  // ── TS CODE ACTIONS (auto-import, quick fixes) ──
+  for (const lang of TS_LANGUAGES) {
+    monaco.languages.registerCodeActionProvider(lang, {
+      async provideCodeActions(model, range, context) {
+        if (!tsLspState.ready) return { actions: [], dispose: () => {} };
+
+        const diagnostics = (context.markers || []).map((m) => ({
+          range: {
+            start: { line: m.startLineNumber - 1, character: m.startColumn - 1 },
+            end: { line: m.endLineNumber - 1, character: m.endColumn - 1 },
+          },
+          message: m.message,
+          severity: m.severity === monaco.MarkerSeverity.Error ? 1
+            : m.severity === monaco.MarkerSeverity.Warning ? 2
+            : m.severity === monaco.MarkerSeverity.Info ? 3 : 4,
+          code: m.code,
+          source: m.source,
+        }));
+
+        try {
+          const result = await window.api.tsLspRequest('textDocument/codeAction', {
+            textDocument: { uri: model.uri.toString() },
+            range: {
+              start: monacoToLspPosition({ lineNumber: range.startLineNumber, column: range.startColumn }),
+              end: monacoToLspPosition({ lineNumber: range.endLineNumber, column: range.endColumn }),
+            },
+            context: { diagnostics },
+          });
+
+          if (!result || !Array.isArray(result)) return { actions: [], dispose: () => {} };
+          const actions = result.map((a) => _lspCodeActionToMonaco(a, model, 'tsLsp')).filter(Boolean);
+          return { actions, dispose: () => {} };
+        } catch { return { actions: [], dispose: () => {} }; }
+      },
+    });
+  }
+
+  // ── TS DIAGNOSTICS ──
+  window.api.onTsLspNotification((message) => {
+    if (message.method === 'textDocument/publishDiagnostics') {
+      const { uri, diagnostics } = message.params;
+      const modelUri = monaco.Uri.parse(uri);
+      const model = monaco.editor.getModel(modelUri);
+      if (model) {
+        const markers = diagnostics.map(d => ({
+          severity: mapDiagnosticSeverity(d.severity),
+          message: d.message,
+          startLineNumber: d.range.start.line + 1,
+          startColumn: d.range.start.character + 1,
+          endLineNumber: d.range.end.line + 1,
+          endColumn: d.range.end.character + 1,
+          source: d.source || 'typescript',
+          code: d.code,
+        }));
+        monaco.editor.setModelMarkers(model, 'typescript', markers);
+      }
+    }
+  });
+}
+
 // Registrar los providers de Monaco una sola vez
 initLspProviders();
+initHtmlCompletions();
 initBladeCompletions();
 initPhpSmartSnippets();
+initTsLspProviders();

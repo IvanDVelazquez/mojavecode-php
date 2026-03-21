@@ -43,9 +43,10 @@ const state = {
   sidebarView: 'explorer',   // 'explorer' | 'git' | 'search'
   gitRefreshTimer: null,
   editor: null,                // Instancia de Monaco (pane izquierdo)
-  terminal: null,              // Instancia de xterm.js
-  terminalFitAddon: null,
-  terminalResizeObserver: null, // ResizeObserver del terminal container
+  // ── Multi-terminal ──
+  terminals: new Map(),        // Map<id, { xterm, fitAddon, resizeObserver, ptyId, el }>
+  activeTerminalId: null,      // ID de la terminal activa
+  terminalNextId: 1,           // Counter local para naming
   formatOnSave: false,         // PHP format on save (desactivado por defecto)
   autoSave: false,             // Auto-save (desactivado por defecto)
   autoSaveTimer: null,         // Timer del debounce de auto-save
@@ -87,8 +88,12 @@ function initEditor() {
       { token: 'variable', foreground: 'C792EA' },
       { token: 'constant', foreground: 'F7A73E', fontStyle: 'bold' },
       { token: 'tag', foreground: '3fb950' },
+      { token: 'tag.html', foreground: '3fb950' },
+      { token: 'delimiter.html', foreground: '6B87A8' },
       { token: 'attribute.name', foreground: '247D9D' },
+      { token: 'attribute.name.html', foreground: '247D9D' },
       { token: 'attribute.value', foreground: 'F1D7BA' },
+      { token: 'attribute.value.html', foreground: 'F1D7BA' },
     ],
     colors: {
       'editor.background': '#152a4a',
@@ -122,8 +127,12 @@ function initEditor() {
       { token: 'variable', foreground: '7C3AED' },
       { token: 'constant', foreground: 'c88520', fontStyle: 'bold' },
       { token: 'tag', foreground: '2d8a3e' },
+      { token: 'tag.html', foreground: '2d8a3e' },
+      { token: 'delimiter.html', foreground: '6B87A8' },
       { token: 'attribute.name', foreground: '247D9D' },
+      { token: 'attribute.name.html', foreground: '247D9D' },
       { token: 'attribute.value', foreground: '1a8a72' },
+      { token: 'attribute.value.html', foreground: '1a8a72' },
     ],
     colors: {
       'editor.background': '#FFFFFF',
@@ -144,6 +153,30 @@ function initEditor() {
     },
   });
 
+  // ── Habilitar JSX/TSX en los lenguajes JS/TS de Monaco ──
+  // Sin esto, Monaco trata <div> como operadores < y > en vez de tags JSX.
+  const jsxOpts = {
+    jsx: monaco.languages.typescript.JsxEmit.React,
+    allowJs: true,
+    allowNonTsExtensions: true,
+    target: monaco.languages.typescript.ScriptTarget.ESNext,
+    moduleResolution: monaco.languages.typescript.ModuleResolutionKind.NodeJs,
+    module: monaco.languages.typescript.ModuleKind.ESNext,
+    esModuleInterop: true,
+    allowSyntheticDefaultImports: true,
+  };
+  monaco.languages.typescript.typescriptDefaults.setCompilerOptions(jsxOpts);
+  monaco.languages.typescript.javascriptDefaults.setCompilerOptions(jsxOpts);
+
+  // Desactivar diagnósticos built-in de Monaco (usamos los del TS LSP externo)
+  // pero mantener el semantic tokens provider activo para colorear JSX
+  monaco.languages.typescript.typescriptDefaults.setDiagnosticsOptions({ noSemanticValidation: true, noSyntaxValidation: true });
+  monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions({ noSemanticValidation: true, noSyntaxValidation: true });
+
+  // Sincronizar modelos automáticamente para que el TS worker los analice
+  monaco.languages.typescript.typescriptDefaults.setEagerModelSync(true);
+  monaco.languages.typescript.javascriptDefaults.setEagerModelSync(true);
+
   // Crear la instancia del editor
   state.editor = monaco.editor.create(
     document.getElementById('editor-container'),
@@ -156,6 +189,7 @@ function initEditor() {
       minimap: { enabled: true },
       scrollBeyondLastLine: false,
       renderWhitespace: 'selection',
+      'semanticHighlighting.enabled': true,
       bracketPairColorization: { enabled: true },
       guides: { indentation: true },
       padding: { top: 8 },
@@ -308,6 +342,9 @@ function applyZoom(size) {
   state.editor.updateOptions({ fontSize: clamped, lineHeight });
   // Sincronizar zoom con el pane derecho si el split está activo
   if (state.editorRight) state.editorRight.updateOptions({ fontSize: clamped, lineHeight });
+  // Escalar tabs especiales (rutas, database, error log) proporcionalmente
+  const specialZoom = clamped / z.defaultFontSize;
+  document.documentElement.style.setProperty('--special-tab-zoom', specialZoom);
   localStorage.setItem('mojavecode-zoom-fontSize', clamped);
   updateZoomIndicator();
 }
@@ -612,104 +649,218 @@ function showDockerNoticeIfNeeded(caps) {
 // │  auto-resize, WebLinksAddon para URLs, y manejo  │
 // │  bidireccional de datos (input/output).           │
 // └──────────────────────────────────────────────────┘
-async function initTerminal() {
-  // xterm y addons se cargan como scripts globales desde index.html
-  // (antes del AMD loader de Monaco para evitar conflictos)
+// ────────────────────────────────────────────────────────────────
+// 2. MULTI-TERMINAL
+// ────────────────────────────────────────────────────────────────
+//
+// Cada terminal es una instancia independiente de xterm.js + pty.
+// Las terminales se muestran dentro del tab especial __terminal__
+// con su propia barra de tabs interna. El estado se mantiene en
+// state.terminals (Map<localId, termInfo>).
+
+/**
+ * Retorna el tema de colores para una nueva instancia de xterm.js.
+ * Usa el tema custom activo si existe, o el tema Mojave Dark por defecto.
+ */
+function getTerminalThemeColors() {
+  const customThemes = typeof getCustomThemes === 'function' ? getCustomThemes() : [];
+  const currentThemeName = localStorage.getItem('mojavecode-php-theme') || 'dark';
+  const custom = customThemes.find(t => t.id === currentThemeName);
+  if (custom && typeof generateTerminalTheme === 'function') {
+    return generateTerminalTheme(custom);
+  }
+  return {
+    background: '#0a1420', foreground: '#F4E2CE', cursor: '#E85324',
+    cursorAccent: '#0a1420', selectionBackground: '#26476980',
+    black: '#0d1a2a', red: '#EA6E40', green: '#3fb950', yellow: '#F7A73E',
+    blue: '#247D9D', magenta: '#C4A882', cyan: '#2dd4bf', white: '#F4E2CE',
+    brightBlack: '#6B87A8', brightRed: '#F5663C', brightGreen: '#3fb950',
+    brightYellow: '#F5B25C', brightBlue: '#2dd4bf', brightMagenta: '#F1D7BA',
+    brightCyan: '#2dd4bf', brightWhite: '#FEFAF7',
+  };
+}
+
+/**
+ * Crea una nueva instancia de terminal (xterm.js + pty).
+ * La agrega al DOM, conecta el pty, y la activa.
+ *
+ * @param {string} [cwd] - Directorio de trabajo (default: project root)
+ * @returns {number} ID local de la terminal creada
+ */
+async function createTerminalInstance(cwd) {
   const Terminal = globalThis.Terminal;
   const FitAddon = window.FitAddon?.FitAddon;
   const WebLinksAddon = window.WebLinksAddon?.WebLinksAddon;
 
-  // Crear la terminal
-  state.terminal = new Terminal({
+  const localId = state.terminalNextId++;
+
+  // Crear el DOM container para esta instancia
+  const el = document.createElement('div');
+  el.className = 'terminal-instance';
+  el.id = `terminal-inst-${localId}`;
+  document.getElementById('terminal-instances').appendChild(el);
+
+  // Crear xterm.js
+  const xterm = new Terminal({
     fontFamily: "'JetBrains Mono', monospace",
     fontSize: 13,
     lineHeight: 1.5,
-    theme: {
-      background: '#0a1420',
-      foreground: '#F4E2CE',
-      cursor: '#E85324',
-      cursorAccent: '#0a1420',
-      selectionBackground: '#26476980',
-      black: '#0d1a2a',
-      red: '#EA6E40',
-      green: '#3fb950',
-      yellow: '#F7A73E',
-      blue: '#247D9D',
-      magenta: '#C4A882',
-      cyan: '#2dd4bf',
-      white: '#F4E2CE',
-      brightBlack: '#6B87A8',
-      brightRed: '#F5663C',
-      brightGreen: '#3fb950',
-      brightYellow: '#F5B25C',
-      brightBlue: '#2dd4bf',
-      brightMagenta: '#F1D7BA',
-      brightCyan: '#2dd4bf',
-      brightWhite: '#FEFAF7',
-    },
+    theme: getTerminalThemeColors(),
     cursorBlink: true,
     scrollback: 5000,
     allowTransparency: true,
   });
 
-  // Addons: FitAddon ajusta cols/rows al tamaño del container
+  let fitAddon = null;
   if (FitAddon) {
-    state.terminalFitAddon = new FitAddon();
-    state.terminal.loadAddon(state.terminalFitAddon);
+    fitAddon = new FitAddon();
+    xterm.loadAddon(fitAddon);
   }
-
-  // WebLinksAddon: hace clickeables los URLs en la terminal
   if (WebLinksAddon) {
-    state.terminal.loadAddon(new WebLinksAddon());
+    xterm.loadAddon(new WebLinksAddon());
   }
 
-  // Montar en el DOM
-  state.terminal.open(document.getElementById('terminal-container'));
+  xterm.open(el);
+  if (fitAddon) setTimeout(() => fitAddon.fit(), 100);
 
-  // Fit al container
-  if (state.terminalFitAddon) {
-    setTimeout(() => state.terminalFitAddon.fit(), 100);
-  }
-
-  // Conectar al pty del main process
-  const cwd = state.currentFolder || undefined;
-  const result = await window.api.ptySpawn(cwd);
-
+  // Spawn pty
+  const result = await window.api.ptySpawn(cwd || state.currentFolder || undefined);
   if (result.error) {
-    state.terminal.writeln(`\x1b[31mTerminal error: ${result.error}\x1b[0m`);
-    state.terminal.writeln('Install node-pty: npm rebuild node-pty');
-    return;
+    xterm.writeln(`\x1b[31mTerminal error: ${result.error}\x1b[0m`);
+    xterm.writeln('Install node-pty: npm rebuild node-pty');
   }
 
-  // pty → xterm (output)
-  window.api.onPtyData((data) => {
-    state.terminal.write(data);
-    // Detectar cuando un comando terminó (prompt regresó) y refrescar la rama git
-    scheduleGitBranchRefresh();
+  const ptyId = result.id || null;
+
+  // xterm → pty
+  xterm.onData((data) => {
+    if (ptyId) window.api.ptyWrite(ptyId, data);
   });
 
-  // xterm → pty (input del usuario)
-  state.terminal.onData((data) => {
-    window.api.ptyWrite(data);
-  });
-
-  // Cuando el pty se cierra
-  window.api.onPtyExit((code) => {
-    state.terminal.writeln(`\r\n\x1b[33mProcess exited with code ${code}\x1b[0m`);
-  });
-
-  // Resize: cuando el container cambia de tamaño, ajustamos xterm y el pty
-  // Guardar referencia para poder desconectar si se destruye la terminal
-  if (state.terminalResizeObserver) {
-    state.terminalResizeObserver.disconnect();
-  }
-  state.terminalResizeObserver = new ResizeObserver(() => {
-    if (state.terminalFitAddon) {
-      state.terminalFitAddon.fit();
-      window.api.ptyResize(state.terminal.cols, state.terminal.rows);
+  // ResizeObserver
+  const resizeObserver = new ResizeObserver(() => {
+    if (fitAddon) {
+      fitAddon.fit();
+      if (ptyId) window.api.ptyResize(ptyId, xterm.cols, xterm.rows);
     }
   });
-  state.terminalResizeObserver.observe(document.getElementById('terminal-container'));
+  resizeObserver.observe(el);
+
+  // Guardar en el Map
+  const termInfo = { xterm, fitAddon, resizeObserver, ptyId, el, name: `Terminal ${localId}` };
+  state.terminals.set(localId, termInfo);
+
+  // Activar esta terminal
+  activateTerminalInstance(localId);
+  renderTerminalTabs();
+
+  return localId;
+}
+
+/**
+ * Activa una instancia de terminal específica, ocultando las demás.
+ */
+function activateTerminalInstance(localId) {
+  state.activeTerminalId = localId;
+  for (const [id, info] of state.terminals) {
+    info.el.classList.toggle('active', id === localId);
+  }
+  const active = state.terminals.get(localId);
+  if (active) {
+    if (active.fitAddon) setTimeout(() => active.fitAddon.fit(), 50);
+    active.xterm.focus();
+  }
+  renderTerminalTabs();
+}
+
+/**
+ * Cierra una instancia de terminal: mata el pty, destruye xterm,
+ * desconecta el ResizeObserver, y limpia el DOM.
+ */
+function closeTerminalInstance(localId) {
+  const info = state.terminals.get(localId);
+  if (!info) return;
+
+  // Kill pty
+  if (info.ptyId) window.api.ptyKill(info.ptyId);
+
+  // Cleanup
+  info.resizeObserver.disconnect();
+  info.xterm.dispose();
+  info.el.remove();
+  state.terminals.delete(localId);
+
+  // Si era la activa, activar otra o cerrar el tab
+  if (state.activeTerminalId === localId) {
+    const remaining = [...state.terminals.keys()];
+    if (remaining.length > 0) {
+      activateTerminalInstance(remaining[remaining.length - 1]);
+    } else {
+      state.activeTerminalId = null;
+      closeTab('__terminal__');
+    }
+  }
+  renderTerminalTabs();
+}
+
+/**
+ * Renderiza la barra de tabs interna de las terminales.
+ */
+function renderTerminalTabs() {
+  const container = document.getElementById('terminal-tabs');
+  if (!container) return;
+
+  container.innerHTML = '';
+  for (const [id, info] of state.terminals) {
+    const tab = document.createElement('button');
+    tab.className = `terminal-tab${id === state.activeTerminalId ? ' active' : ''}`;
+    tab.innerHTML = `<span>${info.name}</span><span class="terminal-tab-close" data-id="${id}">×</span>`;
+    tab.addEventListener('click', (e) => {
+      if (e.target.closest('.terminal-tab-close')) return;
+      activateTerminalInstance(id);
+    });
+    container.appendChild(tab);
+  }
+
+  // Close button handlers
+  container.querySelectorAll('.terminal-tab-close').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeTerminalInstance(parseInt(btn.dataset.id, 10));
+    });
+  });
+}
+
+/**
+ * Inicializa el sistema de multi-terminal: registra los IPC listeners
+ * globales para pty:data y pty:exit, y el botón "+" para crear terminales.
+ */
+async function initTerminal() {
+  // ── IPC listeners globales (routean por ptyId) ──
+  window.api.onPtyData((ptyId, data) => {
+    for (const info of state.terminals.values()) {
+      if (info.ptyId === ptyId) {
+        info.xterm.write(data);
+        scheduleGitBranchRefresh();
+        break;
+      }
+    }
+  });
+
+  window.api.onPtyExit((ptyId, code) => {
+    for (const [id, info] of state.terminals) {
+      if (info.ptyId === ptyId) {
+        info.xterm.writeln(`\r\n\x1b[33mProcess exited with code ${code}\x1b[0m`);
+        info.ptyId = null; // Marcar como sin pty
+        break;
+      }
+    }
+  });
+
+  // ── Botón "+" para crear nueva terminal ──
+  document.getElementById('terminal-add-btn')?.addEventListener('click', () => {
+    createTerminalInstance();
+  });
 }
 
 // ┌──────────────────────────────────────────────────┐
@@ -830,9 +981,12 @@ async function loadFileTree(folderPath) {
     }
   });
 
-  // Iniciar LSP para esta carpeta
+  // Iniciar LSPs para esta carpeta (PHP + TS/JS)
   if (typeof startLsp === 'function') {
     startLsp(folderPath);
+  }
+  if (typeof startTsLsp === 'function') {
+    startTsLsp(folderPath);
   }
 
   // Detectar Composer/Artisan/Modules
@@ -854,24 +1008,21 @@ async function renderTreeLevel(dirPath, parentEl, depth) {
         <span class="tree-icon folder-icon">${getFolderIcon()}</span>
         <span class="tree-name">${escapeHtml(entry.name)}</span>`;
 
-      let expanded = false;
-      let childContainer = null;
-
       item.addEventListener('click', async () => {
-        if (!expanded) {
+        const chevron = item.querySelector('.tree-chevron');
+        const isExpanded = chevron.textContent === '▾';
+        if (!isExpanded) {
           // Lazy load: cargar hijos al expandir
-          childContainer = document.createElement('div');
+          const childContainer = document.createElement('div');
           childContainer.className = 'tree-children';
           item.after(childContainer);
           await renderTreeLevel(entry.path, childContainer, depth + 1);
-          item.querySelector('.tree-chevron').textContent = '▾';
-          expanded = true;
+          chevron.textContent = '▾';
         } else {
           // Colapsar: remover hijos
-          childContainer?.remove();
-          childContainer = null;
-          item.querySelector('.tree-chevron').textContent = '▸';
-          expanded = false;
+          const next = item.nextElementSibling;
+          if (next?.classList.contains('tree-children')) next.remove();
+          chevron.textContent = '▸';
         }
       });
     } else {
@@ -1194,9 +1345,12 @@ async function openFile(filePath, fileName) {
   // Empezar a observar el archivo para detectar cambios externos
   window.api.watchAdd(filePath);
 
-  // Notificar al LSP si es un archivo PHP
+  // Notificar a los LSPs según el tipo de archivo
   if (typeof lspTrackModel === 'function') {
     lspTrackModel(model, language);
+  }
+  if (typeof tsLspTrackModel === 'function') {
+    tsLspTrackModel(model);
   }
 
   // Auto-namespace: si es un .php vacío, generar boilerplate
@@ -1237,7 +1391,7 @@ class ${className}
 // Registry de tabs especiales: mapea path (o prefijo) a su container y config.
 // Para agregar un nuevo tab especial, solo hay que agregar una entrada acá.
 const specialTabs = [
-  { match: '__terminal__',        container: 'terminal-container',       display: 'block', label: 'Terminal',  onActivate: () => { if (state.terminalFitAddon) setTimeout(() => state.terminalFitAddon.fit(), 50); state.terminal?.focus(); } },
+  { match: '__terminal__',        container: 'terminal-container',       display: 'flex', label: 'Terminal',  onActivate: () => { if (state.activeTerminalId) activateTerminalInstance(state.activeTerminalId); } },
   { match: '__git-graph__',       container: 'git-graph-container',      display: 'block', label: 'Git Graph' },
   { match: '__diff__',            container: 'diff-container',           display: 'flex',  label: 'Diff',      prefix: true, onActivate: (tab) => { if (tab.diffEditor) { setTimeout(() => tab.diffEditor.layout(), 50); } else { closeTab(tab.path); } } },
   { match: '__conflict__',        container: 'diff-container',           display: 'flex',  label: 'Conflict',  prefix: true, onActivate: (tab) => { if (tab.conflictEditors) { setTimeout(() => tab.conflictEditors.forEach((e) => e.layout()), 50); } else { closeTab(tab.path); } } },
@@ -1343,10 +1497,16 @@ function closeTab(tabPath) {
     if (!save) return;
   }
 
-  // Matar el proceso pty si el usuario cierra el tab de terminal
-  // Así la próxima vez que la abra arranca una sesión completamente nueva
+  // Matar todos los procesos pty si el usuario cierra el tab de terminal
   if (tab.path === '__terminal__') {
-    window.api.ptyKill();
+    for (const [id, info] of state.terminals) {
+      if (info.ptyId) window.api.ptyKill(info.ptyId);
+      info.resizeObserver.disconnect();
+      info.xterm.dispose();
+      info.el.remove();
+    }
+    state.terminals.clear();
+    state.activeTerminalId = null;
   }
 
   // Limpiar diff editor si aplica (dispose editor ANTES que los models)
@@ -1365,12 +1525,10 @@ function closeTab(tabPath) {
   const isSpecialTab = tab.path.startsWith('__');
   const isAlsoInRightPane = state.openTabsRight.some((t) => t.path === tab.path);
   if (!isSpecialTab && tab.model && !isAlsoInRightPane) {
-    if (typeof lspUntrackModel === 'function') {
-      lspUntrackModel(tab.model);
-    }
+    if (typeof lspUntrackModel === 'function') lspUntrackModel(tab.model);
+    if (typeof tsLspUntrackModel === 'function') tsLspUntrackModel(tab.model);
     try { tab.model.dispose(); } catch { /* ya dispuesto */ }
     tab.model = null;
-    // Dejar de observar el archivo solo si ya no está en ningún pane
     window.api.watchRemove(tab.path);
   }
 
@@ -1404,9 +1562,16 @@ function closeAllTabs() {
     if (!close) return;
   }
 
-  // Matar el pty si hay un tab de terminal abierto
+  // Matar todos los ptys si hay terminales abiertas
   if (state.openTabs.some((t) => t.path === '__terminal__')) {
-    window.api.ptyKill();
+    for (const info of state.terminals.values()) {
+      if (info.ptyId) window.api.ptyKill(info.ptyId);
+      info.resizeObserver.disconnect();
+      info.xterm.dispose();
+      info.el.remove();
+    }
+    state.terminals.clear();
+    state.activeTerminalId = null;
   }
 
   // Disponer todos los models y diff editors (proteger contra doble dispose)
@@ -1417,6 +1582,7 @@ function closeAllTabs() {
     }
     if (tab.model && !tab.path.startsWith('__')) {
       if (typeof lspUntrackModel === 'function') lspUntrackModel(tab.model);
+      if (typeof tsLspUntrackModel === 'function') tsLspUntrackModel(tab.model);
       try { tab.model.dispose(); } catch {}
       tab.model = null;
     }
@@ -1453,11 +1619,21 @@ function closeAllTabs() {
   updateOutline();
 }
 
+/**
+ * Resetea todas las terminales con un nuevo cwd (al cambiar de proyecto).
+ * Mata todos los ptys y respawnea con el nuevo directorio.
+ */
 async function resetTerminal(cwd) {
-  if (state.terminal) {
-    state.terminal.clear();
-    // Respawn pty con nuevo cwd
-    await window.api.ptySpawn(cwd);
+  for (const [id, info] of state.terminals) {
+    info.xterm.clear();
+    if (info.ptyId) {
+      await window.api.ptyKill(info.ptyId);
+    }
+    const result = await window.api.ptySpawn(cwd);
+    info.ptyId = result.id || null;
+    if (result.error) {
+      info.xterm.writeln(`\x1b[31mTerminal error: ${result.error}\x1b[0m`);
+    }
   }
 }
 
@@ -1657,13 +1833,13 @@ function ensureRightEditor() {
   state.editorRight = monaco.editor.create(
     document.getElementById('editor-container-right'),
     {
-      theme: state.editor.getRawOptions().theme || 'mojavecode-php-dark',
       fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
       fontSize: state.zoom.fontSize,
       lineHeight: 22,
       minimap: { enabled: true },
       scrollBeyondLastLine: false,
       renderWhitespace: 'selection',
+      'semanticHighlighting.enabled': true,
       bracketPairColorization: { enabled: true },
       guides: { indentation: true },
       padding: { top: 8 },
@@ -2010,9 +2186,12 @@ async function saveCurrentFile() {
     tab.modified = false;
     state.activePaneRight ? renderTabsRight() : renderTabs();
 
-    // Notificar al LSP del save
+    // Notificar a los LSPs del save
     if (typeof lspDidSave === 'function' && tab.model) {
       lspDidSave(tab.model.uri.toString(), content);
+    }
+    if (typeof tsLspDidSave === 'function' && tab.model) {
+      tsLspDidSave(tab.model.uri.toString(), content);
     }
 
     // Format on save para archivos PHP
@@ -2042,8 +2221,8 @@ async function saveCurrentFile() {
 // └──────────────────────────────────────────────────┘
 function getMonacoLanguage(ext) {
   const map = {
-    js: 'javascript', jsx: 'javascript', mjs: 'javascript',
-    ts: 'typescript', tsx: 'typescript',
+    js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'javascript',
+    ts: 'typescript', mts: 'typescript', cts: 'typescript', tsx: 'typescript',
     json: 'json', json5: 'json',
     html: 'html', htm: 'html',
     css: 'css', scss: 'scss', less: 'less',
@@ -2394,17 +2573,20 @@ function initSidebarResize() {
   });
 }
 
+/**
+ * Alterna la visibilidad del tab de terminal.
+ * Si no hay terminales, crea la primera instancia.
+ */
 function toggleTerminal() {
   const existing = state.openTabs.find((t) => t.path === '__terminal__');
   if (existing) {
-    // Si ya está abierto y es el activo, cerrarlo; si no, activarlo
     if (state.activeTab === existing) {
       closeTab('__terminal__');
     } else {
       activateTab(existing);
     }
   } else {
-    // Abrir como tab nuevo
+    // Abrir como tab nuevo y crear la primera instancia de terminal
     const tab = {
       path: '__terminal__',
       name: 'Terminal',
@@ -2414,12 +2596,12 @@ function toggleTerminal() {
     };
     state.openTabs.push(tab);
     activateTab(tab);
-    // Limpiar el buffer viejo y arrancar un pty completamente nuevo.
-    // Si el tab se cerró antes, el pty fue matado en closeTab,
-    // así que necesitamos un nuevo spawn para que la terminal funcione.
-    if (state.terminal) {
-      state.terminal.clear();
-      window.api.ptySpawn(state.currentFolder || undefined);
+    // Si no hay terminales activas, crear una
+    if (state.terminals.size === 0) {
+      createTerminalInstance();
+    } else {
+      // Reactivar la terminal que estaba activa
+      if (state.activeTerminalId) activateTerminalInstance(state.activeTerminalId);
     }
   }
 }
@@ -2730,9 +2912,28 @@ function renderGitGraph(container, commits) {
 // └──────────────────────────────────────────────────┘
 function initSidebarSections() {
   document.querySelectorAll('.sidebar-section-header').forEach((header) => {
-    header.addEventListener('click', () => {
+    header.addEventListener('click', (e) => {
+      // No colapsar la sección si se clickeó el botón de collapse tree
+      if (e.target.closest('.tree-action-btn')) return;
       header.classList.toggle('collapsed');
       header.closest('.sidebar-section').classList.toggle('collapsed');
+    });
+  });
+
+  // Collapse all sub-folders in the file tree (keep root-level folders expanded)
+  document.getElementById('btn-collapse-tree').addEventListener('click', (e) => {
+    e.stopPropagation(); // No propagar al header (evita colapsar sección FILES)
+    const tree = document.getElementById('file-tree');
+    // Remover todos los .tree-children (sub-folders expandidos) del DOM.
+    // Los click handlers leen el estado del chevron, así que queda sincronizado.
+    const allChildren = tree.querySelectorAll('.tree-children');
+    allChildren.forEach(c => c.remove());
+    // Resetear todos los chevrons de carpetas a collapsed (▸), excepto depth 0
+    tree.querySelectorAll('.tree-item').forEach(item => {
+      const chevron = item.querySelector('.tree-chevron');
+      if (chevron && chevron.textContent === '▾' && parseInt(item.style.paddingLeft) > 12) {
+        chevron.textContent = '▸';
+      }
     });
   });
 }
@@ -3097,6 +3298,7 @@ const searchState = {
   caseSensitive: false,
   results: [],
   searchTimeout: null,
+  generation: 0,
 };
 
 function toggleSearchPanel() {
@@ -3131,12 +3333,23 @@ async function performSearch() {
     return;
   }
 
+  // Incrementar generación para descartar resultados de búsquedas anteriores.
+  // Si el usuario escribe "rdx" lento, se lanzan búsquedas para "r", "rd", "rdx".
+  // La búsqueda de "r" (miles de matches) puede tardar más que "rdx" (pocos matches).
+  // Sin este guard, los resultados de "r" llegarían después y pisarían los de "rdx".
+  const gen = ++searchState.generation;
+
   document.getElementById('search-status').textContent = 'Searching...';
+  document.getElementById('search-results').innerHTML = '';
+  document.getElementById('search-collapse-all').textContent = '⊟';
 
   const result = await window.api.searchInFiles(state.currentFolder, query, {
     isRegex: searchState.isRegex,
     caseSensitive: searchState.caseSensitive,
   });
+
+  // Descartar si ya se lanzó otra búsqueda más reciente
+  if (gen !== searchState.generation) return;
 
   if (result.error) {
     document.getElementById('search-status').textContent = result.error;
@@ -3287,6 +3500,15 @@ function initSearchPanel() {
         }
       });
     }
+  });
+
+  // Collapse/expand all search results
+  const collapseBtn = document.getElementById('search-collapse-all');
+  collapseBtn.addEventListener('click', () => {
+    const groups = document.querySelectorAll('.search-file-group');
+    const allCollapsed = [...groups].every(g => g.classList.contains('collapsed'));
+    groups.forEach(g => g.classList.toggle('collapsed', !allCollapsed));
+    collapseBtn.textContent = allCollapsed ? '⊟' : '⊞';
   });
 
   // Sidebar button
@@ -4955,9 +5177,10 @@ function switchTheme(themeName) {
     const monacoId = `mojavecode-custom-${custom.id}`;
     registerCustomMonacoTheme(monacoId, custom);
     monaco.editor.setTheme(monacoId);
-    // 3. Terminal → actualizar los 16 colores ANSI + fondo/cursor
-    if (state.terminal) {
-      state.terminal.options.theme = generateTerminalTheme(custom);
+    // 3. Terminales → actualizar los 16 colores ANSI + fondo/cursor
+    const termTheme = generateTerminalTheme(custom);
+    for (const info of state.terminals.values()) {
+      info.xterm.options.theme = termTheme;
     }
   } else {
     // ── Tema built-in (dark/light) ──
@@ -4967,8 +5190,8 @@ function switchTheme(themeName) {
     const monacoTheme = themeName === 'light' ? 'mojavecode-php-light' : 'mojavecode-php-dark';
     monaco.editor.setTheme(monacoTheme);
     // Restaurar colores de terminal al tema Mojave Dark original
-    if (state.terminal && themeName === 'dark') {
-      state.terminal.options.theme = {
+    if (themeName === 'dark') {
+      const darkTermTheme = {
         background: '#0a1420', foreground: '#F4E2CE', cursor: '#E85324',
         cursorAccent: '#0a1420', selectionBackground: '#26476980',
         black: '#0d1a2a', red: '#EA6E40', green: '#3fb950', yellow: '#F7A73E',
@@ -4977,23 +5200,45 @@ function switchTheme(themeName) {
         brightYellow: '#F5B25C', brightBlue: '#2dd4bf', brightMagenta: '#F1D7BA',
         brightCyan: '#2dd4bf', brightWhite: '#FEFAF7',
       };
+      for (const info of state.terminals.values()) {
+        info.xterm.options.theme = darkTermTheme;
+      }
     }
   }
 
   localStorage.setItem('mojavecode-php-theme', themeName);
   window.api.syncTheme(themeName);
+
+  // Persistir en archivo para que nuevas ventanas hereden el tema
+  const allCustom = getCustomThemes();
+  window.api.saveThemeConfig({ activeTheme: themeName, customThemes: allCustom });
 }
 
-function initThemeMenu() {
+async function initThemeMenu() {
+  // Leer config de tema desde archivo (compartido entre ventanas/procesos).
+  // Si el archivo tiene custom themes que localStorage no tiene (nueva ventana),
+  // los importamos a localStorage para que el resto del código los encuentre.
+  const fileConfig = await window.api.getThemeConfig();
+
+  let customThemes = getCustomThemes();
+  if (customThemes.length === 0 && fileConfig.customThemes?.length > 0) {
+    // Nueva ventana: importar custom themes desde el archivo compartido
+    localStorage.setItem('mojavecode-custom-themes', JSON.stringify(fileConfig.customThemes));
+    customThemes = fileConfig.customThemes;
+  }
+
   // Sincronizar temas custom con el main process para que aparezcan en el menú
-  const customThemes = getCustomThemes();
   if (customThemes.length > 0) {
     window.api.syncCustomThemes(customThemes.map(t => ({ id: t.id, name: t.name })));
   }
 
-  // Restaurar tema guardado al iniciar
-  const saved = localStorage.getItem('mojavecode-php-theme') || 'dark';
+  // Restaurar tema: preferir archivo (fuente de verdad compartida) sobre localStorage
+  const saved = fileConfig.activeTheme || localStorage.getItem('mojavecode-php-theme') || 'dark';
   switchTheme(saved);
+
+  // Hacer visible el body y notificar al main para que muestre la ventana
+  document.body.classList.add('theme-ready');
+  window.api.themeReady();
 }
 
 // ┌──────────────────────────────────────────────────┐
@@ -5027,6 +5272,9 @@ function saveCustomThemes(themes) {
   localStorage.setItem('mojavecode-custom-themes', JSON.stringify(themes));
   // Notificar al main process para reconstruir el menú Tema
   window.api.syncCustomThemes(themes.map(t => ({ id: t.id, name: t.name })));
+  // Persistir en archivo para que nuevas ventanas hereden los temas
+  const activeTheme = localStorage.getItem('mojavecode-php-theme') || 'dark';
+  window.api.saveThemeConfig({ activeTheme, customThemes: themes });
 }
 
 // ── Utilidades de color ──
@@ -5226,27 +5474,49 @@ function registerCustomMonacoTheme(monacoId, theme) {
     base: theme.isDark ? 'vs-dark' : 'vs',
     inherit: true,
     rules: [
+      // ── Base token (catch-all para tokens no definidos) ──
+      { token: '', foreground: strip(theme.vars['--text-primary']) },
+      // ── Core syntax ──
       { token: 'comment', foreground: strip(syn.comment), fontStyle: 'italic' },
       { token: 'keyword', foreground: strip(syn.keyword), fontStyle: 'bold' },
+      { token: 'keyword.control', foreground: strip(syn.keyword), fontStyle: 'bold' },
       { token: 'string', foreground: strip(syn.string) },
+      { token: 'string.escape', foreground: strip(syn.number) },
       { token: 'number', foreground: strip(syn.number) },
+      { token: 'number.float', foreground: strip(syn.number) },
       { token: 'type', foreground: strip(syn.type) },
+      { token: 'type.identifier', foreground: strip(syn.type) },
       { token: 'function', foreground: strip(syn.function) },
       { token: 'variable', foreground: strip(syn.variable) },
+      { token: 'variable.predefined', foreground: strip(syn.variable) },
       { token: 'constant', foreground: strip(syn.constant), fontStyle: 'bold' },
+      // ── HTML / Blade ──
       { token: 'tag', foreground: strip(syn.tag) },
+      { token: 'tag.id.pug', foreground: strip(syn.tag) },
+      { token: 'tag.class.pug', foreground: strip(syn.tag) },
       { token: 'attribute.name', foreground: strip(theme.vars['--accent-blue']) },
       { token: 'attribute.value', foreground: strip(syn.string) },
+      { token: 'metatag', foreground: strip(syn.keyword) },
+      { token: 'metatag.content', foreground: strip(syn.string) },
+      // ── Delimiters & operators ──
+      { token: 'delimiter', foreground: strip(theme.vars['--text-secondary']) },
+      { token: 'delimiter.bracket', foreground: strip(theme.vars['--text-secondary']) },
+      { token: 'operator', foreground: strip(theme.vars['--text-primary']) },
+      // ── PHP specific ──
+      { token: 'metatag.php', foreground: strip(syn.keyword) },
+      { token: 'identifier', foreground: strip(theme.vars['--text-primary']) },
+      { token: 'namespace', foreground: strip(syn.type) },
     ],
     colors: {
+      // ── Editor surface ──
       'editor.background': theme.vars['--bg-panel'],
       'editor.foreground': theme.vars['--text-primary'],
       'editor.lineHighlightBackground': theme.vars['--bg-hover'],
       'editor.selectionBackground': theme.vars['--bg-active'],
+      'editor.inactiveSelectionBackground': theme.vars['--bg-active'],
       'editorCursor.foreground': theme.vars['--accent'],
       'editorLineNumber.foreground': theme.vars['--text-muted'],
       'editorLineNumber.activeForeground': theme.vars['--text-primary'],
-      'editor.inactiveSelectionBackground': theme.vars['--bg-active'],
       'editorIndentGuide.background': theme.vars['--border'],
       'editorIndentGuide.activeBackground': adjustLightness(theme.vars['--border'], 5),
       'editorBracketMatch.border': theme.vars['--accent'],
@@ -5254,6 +5524,43 @@ function registerCustomMonacoTheme(monacoId, theme) {
       'minimap.background': theme.vars['--bg-dark'],
       'scrollbarSlider.background': theme.vars['--border'] + '80',
       'scrollbarSlider.hoverBackground': theme.vars['--text-muted'] + '60',
+      // ── Widgets & overlays (evita herencia del azul de vs-dark/vs) ──
+      'editorWidget.background': theme.vars['--bg-sidebar'],
+      'editorWidget.foreground': theme.vars['--text-primary'],
+      'editorWidget.border': theme.vars['--border'],
+      'editorSuggestWidget.background': theme.vars['--bg-sidebar'],
+      'editorSuggestWidget.border': theme.vars['--border'],
+      'editorSuggestWidget.foreground': theme.vars['--text-primary'],
+      'editorSuggestWidget.selectedBackground': theme.vars['--bg-active'],
+      'editorSuggestWidget.highlightForeground': theme.vars['--accent'],
+      'editorHoverWidget.background': theme.vars['--bg-sidebar'],
+      'editorHoverWidget.border': theme.vars['--border'],
+      'editorHoverWidget.foreground': theme.vars['--text-primary'],
+      // ── Peek view / references ──
+      'peekView.border': theme.vars['--accent'],
+      'peekViewEditor.background': theme.vars['--bg-dark'],
+      'peekViewResult.background': theme.vars['--bg-sidebar'],
+      'peekViewResult.selectionBackground': theme.vars['--bg-active'],
+      'peekViewTitle.background': theme.vars['--bg-sidebar'],
+      'peekViewTitleLabel.foreground': theme.vars['--text-primary'],
+      'peekViewTitleDescription.foreground': theme.vars['--text-muted'],
+      // ── Find / replace widget ──
+      'editorFindMatch.background': theme.vars['--accent'] + '40',
+      'editor.findMatchHighlightBackground': theme.vars['--accent'] + '25',
+      'editor.findRangeHighlightBackground': theme.vars['--bg-active'] + '40',
+      // ── Gutter & decorations ──
+      'editorGutter.background': theme.vars['--bg-panel'],
+      'editorGutter.modifiedBackground': theme.vars['--accent-blue'],
+      'editorGutter.addedBackground': theme.vars['--accent-green'],
+      'editorGutter.deletedBackground': theme.vars['--accent-red'],
+      // ── Errors / warnings ──
+      'editorError.foreground': theme.vars['--accent-red'],
+      'editorWarning.foreground': theme.vars['--accent-yellow'],
+      'editorInfo.foreground': theme.vars['--accent-blue'],
+      // ── Overview ruler (minimap sidebar) ──
+      'editorOverviewRuler.border': theme.vars['--border'],
+      'editorOverviewRuler.errorForeground': theme.vars['--accent-red'],
+      'editorOverviewRuler.warningForeground': theme.vars['--accent-yellow'],
     },
   });
 }
@@ -6038,6 +6345,13 @@ function buildCommandRegistry() {
       action: () => window.api.openFolder(),
     },
     {
+      id: 'file.newWindow',
+      label: 'New Window',
+      category: 'File',
+      shortcut: '⌘⇧N',
+      action: () => window.api.windowNew(),
+    },
+    {
       id: 'file.save',
       label: 'Save File',
       category: 'File',
@@ -6083,6 +6397,17 @@ function buildCommandRegistry() {
       category: 'View',
       shortcut: '⌃`',
       action: () => toggleTerminal(),
+    },
+    {
+      id: 'view.newTerminal',
+      label: 'New Terminal',
+      category: 'View',
+      action: () => {
+        const existing = state.openTabs.find((t) => t.path === '__terminal__');
+        if (!existing) toggleTerminal();
+        else activateTab(existing);
+        createTerminalInstance();
+      },
     },
     {
       id: 'view.splitEditor',
@@ -6725,7 +7050,7 @@ function initComposerArtisan() {
   });
 
   // ── Tinker ──
-  window.api.onArtisanTinker(() => {
+  window.api.onArtisanTinker(async () => {
     // Abrir terminal y ejecutar tinker ahí
     const existing = state.openTabs.find((t) => t.path === '__terminal__');
     if (!existing) {
@@ -6733,10 +7058,16 @@ function initComposerArtisan() {
     } else {
       activateTab(existing);
     }
-    // Enviar comando al pty
-    setTimeout(() => {
-      window.api.ptyWrite('php artisan tinker\n');
-    }, existing ? 100 : 500);
+    // Esperar a que la terminal se cree si es nueva
+    const waitForTerminal = () => new Promise((resolve) => {
+      const check = () => state.activeTerminalId && state.terminals.has(state.activeTerminalId) ? resolve() : setTimeout(check, 50);
+      check();
+    });
+    await waitForTerminal();
+    const active = state.terminals.get(state.activeTerminalId);
+    if (active?.ptyId) {
+      setTimeout(() => window.api.ptyWrite(active.ptyId, 'php artisan tinker\n'), 200);
+    }
   });
 }
 

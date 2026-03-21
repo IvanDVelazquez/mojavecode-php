@@ -33,7 +33,7 @@ const { app, BrowserWindow, ipcMain, dialog, Menu, shell } = require('electron')
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const { execFile, execSync } = require('child_process');
+const { execFile, execSync, spawn } = require('child_process');
 const config = require('../config');
 const db = require('./db-helper');
 
@@ -88,6 +88,26 @@ if (app.isPackaged && process.platform === 'darwin') {
 // Se guardan en un JSON en userData para que el menú nativo
 // pueda leerlas sincrónicamente al construirse.
 const RECENT_FILE = path.join(app.getPath('userData'), 'recent-folders.json');
+
+// ── Tema persistente ──
+// Se guarda en un JSON en userData para compartir entre ventanas/procesos.
+// localStorage de Chromium no se comparte entre procesos Electron separados,
+// así que usamos un archivo como fuente de verdad.
+const THEME_FILE = path.join(app.getPath('userData'), 'theme-config.json');
+
+function getThemeConfig() {
+  try {
+    return JSON.parse(fs.readFileSync(THEME_FILE, 'utf-8'));
+  } catch {
+    return { activeTheme: 'dark', customThemes: [] };
+  }
+}
+
+function saveThemeConfig(config) {
+  try {
+    fs.writeFileSync(THEME_FILE, JSON.stringify(config), 'utf-8');
+  } catch { /* ignorar */ }
+}
 const MAX_RECENT = 5;
 
 function getRecentFolders() {
@@ -122,8 +142,11 @@ const { LspManager } = require('./lsp-manager');
 const XdebugManager = require('./xdebug-manager');
 
 let mainWindow;
-let ptyProcess;
+/** @type {Map<number, import('node-pty').IPty>} */
+const ptyProcesses = new Map();
+let ptyNextId = 1;
 let lspManager = null;
+let tsLspManager = null;
 let xdebugManager = null;
 
 // ── Temas custom del usuario (sincronizados desde el renderer) ──
@@ -152,7 +175,31 @@ let projectCapabilities = {
 // 1. VENTANA PRINCIPAL — BrowserWindow con custom titlebar
 //    Configura frame, preload, seguridad y DevTools
 // ────────────────────────────────────────────
+/**
+ * Lee el tema activo del archivo de configuración compartido y devuelve
+ * el color de fondo correspondiente para BrowserWindow.backgroundColor.
+ *
+ * Se ejecuta ANTES de crear la ventana para que Electron muestre el
+ * color correcto desde el primer frame, evitando el flash del tema dark
+ * por defecto al usar temas custom o light.
+ *
+ * @returns {{ bg: string, theme: string, vars: object|null }}
+ */
+function getInitialThemeInfo() {
+  const themeConfig = getThemeConfig();
+  const active = themeConfig.activeTheme || 'dark';
+  if (active === 'dark') return { bg: '#0d1a2a', theme: 'dark', vars: null };
+  if (active === 'light') return { bg: '#F4E2CE', theme: 'light', vars: null };
+  // Custom theme: buscar el color de fondo en los temas guardados
+  const custom = (themeConfig.customThemes || []).find(t => t.id === active);
+  if (custom?.vars) {
+    return { bg: custom.colors?.bg || '#0d1a2a', theme: active, vars: custom.vars };
+  }
+  return { bg: custom?.colors?.bg || '#0d1a2a', theme: active, vars: null };
+}
+
 function createWindow() {
+  const initialTheme = getInitialThemeInfo();
   mainWindow = new BrowserWindow({
     width: config.window.width,
     height: config.window.height,
@@ -160,7 +207,8 @@ function createWindow() {
     minHeight: config.window.minHeight,
     frame: false,
     titleBarStyle: 'hidden',
-    backgroundColor: config.window.bg,
+    backgroundColor: initialTheme.bg,
+    show: false,
     icon: path.join(__dirname, '../../assets/icon.png'),
     webPreferences: {
       // preload.js actúa como puente seguro entre main y renderer
@@ -174,12 +222,33 @@ function createWindow() {
 
   mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
 
-
+  // ── Mostrar ventana solo después de que el tema esté aplicado ──
+  // El renderer envía 'theme:ready' tras aplicar el custom theme.
+  // Fallback de 3s por si el IPC no llega (e.g. error en renderer).
+  const showOnce = () => { if (mainWindow && !mainWindow.isVisible()) mainWindow.show(); };
+  ipcMain.once('theme:ready', showOnce);
+  setTimeout(showOnce, 3000);
 
   mainWindow.on('closed', () => {
     mainWindow = null;
-    if (ptyProcess) ptyProcess.kill();
+    for (const proc of ptyProcesses.values()) {
+      try { proc.kill(); } catch { /* already exited */ }
+    }
+    ptyProcesses.clear();
   });
+}
+
+/**
+ * Abre una nueva instancia independiente de MojaveCode.
+ * Cada ventana es un proceso separado con su propio LSP,
+ * terminales, debugger y estado de proyecto.
+ */
+function spawnNewWindow() {
+  spawn(process.execPath, [app.getAppPath()], {
+    detached: true,
+    stdio: 'ignore',
+    env: { ...process.env, MOJAVECODE_NEW_WINDOW: '1' },
+  }).unref();
 }
 
 // ────────────────────────────────────────────
@@ -231,6 +300,12 @@ function createMenu() {
             );
             return items;
           })(),
+        },
+        { type: 'separator' },
+        {
+          label: 'New Window',
+          accelerator: 'CmdOrCtrl+Shift+N',
+          click: () => spawnNewWindow(),
         },
         { type: 'separator' },
         {
@@ -624,7 +699,7 @@ function createMenu() {
             dialog.showMessageBox(mainWindow, {
               type: 'info',
               title: 'MojaveCode PHP',
-              message: 'MojaveCode PHP v3.0.0',
+              message: 'MojaveCode PHP v3.0.1',
               detail: 'A lightweight code editor by MojaveWare.\nBuilt with Electron + Monaco + xterm.js',
             });
           },
@@ -672,34 +747,32 @@ function detectProjectCapabilities(folderPath) {
   projectCapabilities.hasPhpUnit = fs.existsSync(path.join(folderPath, 'phpunit.xml'))
     || fs.existsSync(path.join(folderPath, 'phpunit.xml.dist'));
 
-  // Detectar Laravel Sail (vendor/bin/sail)
-  //
-  // Sail es la forma oficial de Laravel para correr el proyecto en Docker.
-  // Cuando está disponible y es un proyecto Sail real, usamos ./vendor/bin/sail
-  // en lugar de docker exec.
-  //
-  // IMPORTANTE: Un proyecto puede tener vendor/bin/sail instalado como dependencia
-  // pero correr en un Docker custom (no Sail). Para distinguirlo, exigimos que
-  // el docker-compose.yml esté en la RAÍZ del proyecto Laravel (mismo dir que artisan).
-  // Si el compose está en un directorio padre, es un setup Docker propio → docker exec.
-  projectCapabilities.hasSail = fs.existsSync(path.join(folderPath, 'vendor', 'bin', 'sail'))
-    && fs.existsSync(path.join(folderPath, 'docker-compose.yml'));
-  projectCapabilities.sailEnabled = projectCapabilities.hasSail; // auto-activar al detectar
-
-  // Detectar Docker — buscar docker-compose.yml subiendo directorios
+  // Detectar Docker — buscar docker-compose.yml subiendo directorios.
+  // Busca TODOS los compose subiendo desde el proyecto hasta la raíz.
+  // Usa el primero que tenga container_name + volume mapping válido.
+  // Un compose de Sail típicamente NO tiene container_name, así que se
+  // salta y se encuentra el Docker custom del directorio padre.
   projectCapabilities.hasDocker = false;
   projectCapabilities.dockerEnv = false;
   projectCapabilities.dockerContainer = null;
   projectCapabilities.dockerWorkdir = null;
 
-  const composePath = findDockerCompose(folderPath);
-  if (composePath) {
-    projectCapabilities.hasDocker = true;
+  let parentDockerCoversProject = false;
+  const composePaths = findAllDockerCompose(folderPath);
+  for (const composePath of composePaths) {
     const dockerConfig = parseDockerConfig(composePath, folderPath);
     if (dockerConfig) {
+      projectCapabilities.hasDocker = true;
       projectCapabilities.dockerContainer = dockerConfig.containerName;
       projectCapabilities.dockerWorkdir = dockerConfig.workdir;
+      const composeInParent = path.dirname(composePath) !== folderPath;
+      if (composeInParent) parentDockerCoversProject = true;
+      break;
     }
+  }
+  // Si encontramos compose(s) pero ninguno tuvo config válida, marcar hasDocker
+  if (!projectCapabilities.hasDocker && composePaths.length > 0) {
+    projectCapabilities.hasDocker = true;
   }
 
   // También detectar si .env tiene host.docker.internal (proyecto conecta a servicios vía Docker)
@@ -714,6 +787,15 @@ function detectProjectCapabilities(folderPath) {
       }
     } catch { /* ignore read errors */ }
   }
+
+  // Detectar Laravel Sail (vendor/bin/sail)
+  // Solo considerar Sail si NO hay un docker-compose padre que ya cubra el proyecto.
+  // Un proyecto puede tener vendor/bin/sail instalado como dependencia de Composer
+  // pero correr con un Docker custom desde un directorio padre.
+  const hasSailFiles = fs.existsSync(path.join(folderPath, 'vendor', 'bin', 'sail'))
+    && fs.existsSync(path.join(folderPath, 'docker-compose.yml'));
+  projectCapabilities.hasSail = hasSailFiles && !parentDockerCoversProject;
+  projectCapabilities.sailEnabled = projectCapabilities.hasSail;
 
   // Reset format on save al cambiar de proyecto
   projectCapabilities.formatOnSave = false;
@@ -730,20 +812,27 @@ function detectProjectCapabilities(folderPath) {
 // ── Docker helpers ──
 
 /**
- * Buscar docker-compose.yml subiendo directorios desde folderPath.
- * Retorna la ruta al archivo o null si no se encuentra.
+ * Buscar TODOS los docker-compose.yml subiendo directorios desde folderPath.
+ *
+ * Retorna un array de rutas ordenadas de local a padre. Esto permite
+ * distinguir entre un compose de Sail (local, sin container_name) y
+ * un Docker custom (padre, con container_name + volumes).
+ *
+ * @param {string} folderPath - Directorio raíz del proyecto
+ * @returns {string[]} Rutas a los archivos docker-compose encontrados
  */
-function findDockerCompose(folderPath) {
+function findAllDockerCompose(folderPath) {
+  const found = [];
   let dir = folderPath;
   const root = path.parse(dir).root;
   while (dir !== root) {
     for (const name of ['docker-compose.yml', 'docker-compose.yaml']) {
       const candidate = path.join(dir, name);
-      if (fs.existsSync(candidate)) return candidate;
+      if (fs.existsSync(candidate)) found.push(candidate);
     }
     dir = path.dirname(dir);
   }
-  return null;
+  return found;
 }
 
 /**
@@ -1209,24 +1298,25 @@ ipcMain.handle('dialog:saveAs', async (event, defaultPath) => {
  * 3. Renderer escribe en xterm → manda 'pty:write' → escribimos en el pty
  * 4. Renderer pide resize → mandamos 'pty:resize' → resizeamos el pty
  */
+/**
+ * Crea un nuevo proceso PTY y devuelve su ID numérico.
+ * Cada terminal en el renderer tiene su propio pty.
+ *
+ * @param {string} cwd - Directorio de trabajo inicial
+ * @returns {{ id: number, pid: number } | { error: string }}
+ */
 ipcMain.handle('pty:spawn', (event, cwd) => {
   if (!pty) {
     return { error: 'node-pty not available' };
   }
 
-  // Matar pty anterior si existe
-  if (ptyProcess) {
-    try { ptyProcess.kill(); } catch { /* already exited */ }
-    ptyProcess = null;
-  }
-
-  // Detectar la shell del SO
   const shell = process.platform === 'win32'
     ? 'powershell.exe'
     : process.env.SHELL || '/bin/bash';
 
   try {
-    ptyProcess = pty.spawn(shell, [], {
+    const id = ptyNextId++;
+    const proc = pty.spawn(shell, [], {
       name: 'xterm-256color',
       cols: 80,
       rows: 24,
@@ -1234,59 +1324,68 @@ ipcMain.handle('pty:spawn', (event, cwd) => {
       env: process.env,
     });
 
-    // Cuando el pty produce output, se lo mandamos al renderer
-    ptyProcess.onData((data) => {
+    ptyProcesses.set(id, proc);
+
+    proc.onData((data) => {
       if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('pty:data', data);
+        mainWindow.webContents.send('pty:data', id, data);
       }
     });
 
-    ptyProcess.onExit(({ exitCode }) => {
+    proc.onExit(({ exitCode }) => {
+      ptyProcesses.delete(id);
       if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('pty:exit', exitCode);
+        mainWindow.webContents.send('pty:exit', id, exitCode);
       }
     });
 
-    return { success: true, pid: ptyProcess.pid };
+    return { success: true, id, pid: proc.pid };
   } catch (err) {
     return { error: err.message };
   }
 });
 
-// El renderer escribe en el pty (el usuario tipea en xterm.js)
-ipcMain.on('pty:write', (event, data) => {
-  if (ptyProcess) {
-    ptyProcess.write(data);
+ipcMain.on('pty:write', (event, id, data) => {
+  const proc = ptyProcesses.get(id);
+  if (proc) proc.write(data);
+});
+
+ipcMain.on('pty:resize', (event, id, cols, rows) => {
+  const proc = ptyProcesses.get(id);
+  if (proc) {
+    try { proc.resize(cols, rows); } catch { /* already exited */ }
   }
 });
 
-// El renderer cambia el tamaño de xterm → resize del pty
-ipcMain.on('pty:resize', (event, { cols, rows }) => {
-  if (ptyProcess) {
-    try {
-      ptyProcess.resize(cols, rows);
-    } catch (e) {
-      // Puede fallar si el pty ya se cerró
-    }
-  }
-});
-
-// Matar el pty actual (cuando el usuario cierra la terminal tab)
-// Permite que al reabrir se inicie una terminal completamente nueva
-ipcMain.handle('pty:kill', () => {
-  if (ptyProcess) {
-    try { ptyProcess.kill(); } catch { /* already exited */ }
-    ptyProcess = null;
+/**
+ * Mata un pty específico por su ID.
+ */
+ipcMain.handle('pty:kill', (event, id) => {
+  const proc = ptyProcesses.get(id);
+  if (proc) {
+    try { proc.kill(); } catch { /* already exited */ }
+    ptyProcesses.delete(id);
   }
   return { success: true };
 });
 
-// Cambiar directorio del pty de forma segura (evita inyección de comandos)
-ipcMain.on('pty:cd', (event, cwd) => {
-  if (ptyProcess && cwd) {
-    // Use single quotes to prevent shell expansion, escape any single quotes in path
+/**
+ * Mata todos los procesos pty activos. Se usa al cerrar todos los tabs
+ * o al cambiar de proyecto.
+ */
+ipcMain.handle('pty:killAll', () => {
+  for (const [id, proc] of ptyProcesses) {
+    try { proc.kill(); } catch { /* already exited */ }
+  }
+  ptyProcesses.clear();
+  return { success: true };
+});
+
+ipcMain.on('pty:cd', (event, id, cwd) => {
+  const proc = ptyProcesses.get(id);
+  if (proc && cwd) {
     const safePath = cwd.replace(/'/g, "'\\''");
-    ptyProcess.write(`cd '${safePath}'\n`);
+    proc.write(`cd '${safePath}'\n`);
   }
 });
 
@@ -1689,6 +1788,43 @@ ipcMain.on('lsp:notify', (event, method, params) => {
 });
 
 // ────────────────────────────────────────────────────
+// 7a. IPC HANDLERS — TS LSP (TypeScript / JavaScript / React)
+// ────────────────────────────────────────────────────
+//
+// Segundo servidor LSP para archivos TS/JS/JSX/TSX.
+// Usa typescript-language-server con el TypeScript bundled.
+// Canal IPC separado (tsLsp:*) para no interferir con PHP.
+
+ipcMain.handle('tsLsp:start', async (event, workspaceFolder) => {
+  if (tsLspManager) tsLspManager.stop();
+  tsLspManager = new LspManager(mainWindow, 'tsLsp');
+  return tsLspManager.startTs(workspaceFolder);
+});
+
+ipcMain.handle('tsLsp:stop', async () => {
+  if (tsLspManager) {
+    tsLspManager.stop();
+    tsLspManager = null;
+  }
+});
+
+ipcMain.handle('tsLsp:request', async (event, method, params) => {
+  if (!tsLspManager || tsLspManager.state !== 'ready') return null;
+  try {
+    return await tsLspManager.sendRequest(method, params);
+  } catch (err) {
+    console.error('[tsLsp] Request error:', method, err.message);
+    return null;
+  }
+});
+
+ipcMain.on('tsLsp:notify', (event, method, params) => {
+  if (tsLspManager && tsLspManager.state === 'ready') {
+    tsLspManager.sendNotification(method, params);
+  }
+});
+
+// ────────────────────────────────────────────────────
 // 7b. IPC HANDLERS — XDEBUG (DBGp Debugger)
 // ────────────────────────────────────────────────────
 //
@@ -1798,6 +1934,14 @@ ipcMain.on('theme:sync', (event, themeName) => {
       }
     }
   });
+});
+
+// ── Persistencia de tema en archivo ──
+// Permite que nuevas ventanas (procesos separados) hereden el tema activo.
+ipcMain.handle('theme:getConfig', () => getThemeConfig());
+
+ipcMain.handle('theme:saveConfig', (event, config) => {
+  saveThemeConfig(config);
 });
 
 // Sincronizar lista de temas custom desde el renderer.
@@ -3068,6 +3212,7 @@ ipcMain.on('window:maximize', () => {
   }
 });
 ipcMain.on('window:close', () => mainWindow?.close());
+ipcMain.on('window:new', () => spawnNewWindow());
 
 // ────────────────────────────────────────────
 // 17. APP LIFECYCLE — Inicio, activación y cierre de Electron
@@ -3097,11 +3242,10 @@ app.on('window-all-closed', () => {
 
 // Cleanup del pty y LSP al cerrar
 app.on('before-quit', () => {
-  if (ptyProcess) {
-    ptyProcess.kill();
+  for (const proc of ptyProcesses.values()) {
+    try { proc.kill(); } catch { /* already exited */ }
   }
-  if (lspManager) {
-    lspManager.stop();
-    lspManager = null;
-  }
+  ptyProcesses.clear();
+  if (lspManager) { lspManager.stop(); lspManager = null; }
+  if (tsLspManager) { tsLspManager.stop(); tsLspManager = null; }
 });
