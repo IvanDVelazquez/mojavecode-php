@@ -30,6 +30,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # node-gyp uses distutils which was removed in Python 3.12+
+      - name: Install setuptools (provides distutils for node-gyp)
+        run: pip install setuptools
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -60,6 +68,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install setuptools (provides distutils for node-gyp)
+        run: pip install setuptools
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -86,6 +101,13 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install setuptools (provides distutils for node-gyp)
+        run: pip install setuptools
 
       - uses: actions/setup-node@v4
         with:
