@@ -36,6 +36,7 @@ const os = require('os');
 const { execFile, execSync, spawn } = require('child_process');
 const config = require('../config');
 const db = require('./db-helper');
+const { abbreviateHome } = require('./path-utils');
 
 // ── Fix PATH para apps empaquetadas en macOS ──
 // Cuando Electron corre como .app, el PATH es mínimo (/usr/bin:/bin:/usr/sbin:/sbin).
@@ -336,7 +337,7 @@ function createMenu() {
             if (!recent.length) return [{ label: 'No Recent Folders', enabled: false }];
             const items = recent.map((folderPath) => ({
               label: folderPath.split(/[/\\]/).pop(),
-              sublabel: folderPath.replace(/^\/Users\/[^/]+/, '~'),
+              sublabel: abbreviateHome(folderPath),
               click: () => {
                 saveRecentFolder(folderPath);
                 mainWindow?.webContents.send('folder:opened', folderPath);
@@ -753,7 +754,7 @@ function createMenu() {
             dialog.showMessageBox(mainWindow, {
               type: 'info',
               title: 'MojaveCode PHP',
-              message: 'MojaveCode PHP v3.2.0',
+              message: 'MojaveCode PHP v3.2.1',
               detail: 'A lightweight code editor by MojaveWare.\nBuilt with Electron + Monaco + xterm.js',
             });
           },
@@ -1338,7 +1339,7 @@ ipcMain.handle('fs:listLogs', async (event) => {
 ipcMain.handle('fs:readLogTail', async (event, filePath, lines = 500) => {
   try {
     const content = await fs.promises.readFile(filePath, 'utf-8');
-    const allLines = content.split('\n');
+    const allLines = content.split(/\r?\n/);
     const tail = allLines.slice(-lines).join('\n');
     return { content: tail, totalLines: allLines.length, error: null };
   } catch (err) {
@@ -1503,8 +1504,15 @@ ipcMain.handle('pty:killAll', () => {
 ipcMain.on('pty:cd', (event, id, cwd) => {
   const proc = ptyProcesses.get(id);
   if (proc && cwd) {
-    const safePath = cwd.replace(/'/g, "'\\''");
-    proc.write(`cd '${safePath}'\n`);
+    if (process.platform === 'win32') {
+      // PowerShell: escapar comillas dobles
+      const safePath = cwd.replace(/"/g, '`"');
+      proc.write(`cd "${safePath}"\r\n`);
+    } else {
+      // Bash/Zsh: escapar comillas simples
+      const safePath = cwd.replace(/'/g, "'\\''");
+      proc.write(`cd '${safePath}'\n`);
+    }
   }
 });
 
@@ -2145,7 +2153,7 @@ ipcMain.handle('search:inFiles', async (event, rootDir, query, options = {}) => 
           continue;
         }
 
-        const lines = content.split('\n');
+        const lines = content.split(/\r?\n/);
         for (let i = 0; i < lines.length; i++) {
           if (results.length >= maxResults) break;
           regex.lastIndex = 0;
@@ -2272,7 +2280,7 @@ ipcMain.handle('search:symbols', async (event, rootDir) => {
         } catch { continue; }
 
         const relativePath = path.relative(rootDir, fullPath);
-        const lines = content.split('\n');
+        const lines = content.split(/\r?\n/);
 
         for (let i = 0; i < lines.length; i++) {
           for (const { regex, kind } of patterns) {
@@ -2863,7 +2871,7 @@ ipcMain.handle('claude:read', async (event, folder) => {
     const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
     if (!match) return {};
     const fm = {};
-    for (const line of match[1].split('\n')) {
+    for (const line of match[1].split(/\r?\n/)) {
       const kv = line.match(/^(\w[\w-]*):\s*(.+)$/);
       if (kv) fm[kv[1]] = kv[2].trim();
     }
@@ -3093,7 +3101,7 @@ ipcMain.handle('claude:history', async (event, folder) => {
         continue;
       }
 
-      for (const line of content.split('\n')) {
+      for (const line of content.split(/\r?\n/)) {
         const trimmed = line.trim();
         if (!trimmed) continue;
         let obj;

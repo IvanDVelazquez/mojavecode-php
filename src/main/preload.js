@@ -282,6 +282,7 @@ contextBridge.exposeInMainWorld('api', {
 
   // ── Utilidades ──
   platform: process.platform, // 'win32', 'darwin', 'linux'
+  homeDir: require('os').homedir(),
   getFileIcon: (filename) => getIcon(filename).svg,
   syncTheme: (theme) => ipcRenderer.send('theme:sync', theme),
   syncCustomThemes: (themes) => ipcRenderer.send('theme:syncCustom', themes),

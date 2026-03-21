@@ -181,7 +181,6 @@ function initEditor() {
   state.editor = monaco.editor.create(
     document.getElementById('editor-container'),
     {
-      theme: 'mojavecode-php-dark',
       fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
       fontSize: 14,
       lineHeight: 22,
@@ -913,8 +912,13 @@ function renderRecentFolders() {
   for (const folderPath of recent) {
     const name = folderPath.split(/[/\\]/).pop();
     // Ruta padre para mostrar contexto (ej: ~/projects)
-    const parent = folderPath.substring(0, folderPath.lastIndexOf('/'));
-    const shortParent = parent.replace(/^\/Users\/[^/]+/, '~');
+    const parent = folderPath.split(/[/\\]/).slice(0, -1).join('/');
+    // Abreviar home dir en todas las plataformas (/Users/x, C:\Users\x, /home/x)
+    const homeDir = (window.api.homeDir || '').replace(/\\/g, '/');
+    const parentNorm = parent.replace(/\\/g, '/');
+    const shortParent = homeDir && parentNorm.startsWith(homeDir)
+      ? '~' + parentNorm.slice(homeDir.length)
+      : parent;
     html += `<div class="recent-item" data-path="${escapeAttr(folderPath)}" title="${escapeAttr(folderPath)}">
       <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
       <div class="recent-item-text">
@@ -1223,7 +1227,7 @@ async function revealFileInTree(filePath) {
   // Descomponer la ruta relativa en segmentos de carpeta.
   // Ej: "app/Models/User.php" → ["app", "Models"] (sin el archivo)
   const relative = filePath.slice(state.currentFolder.length + 1);
-  const parts = relative.split('/');
+  const parts = relative.split(/[/\\]/);
   parts.pop();
 
   // Expandir cada carpeta ancestro de arriba hacia abajo
@@ -1478,7 +1482,7 @@ function updateBreadcrumb() {
   }
 
   // Armar los segmentos: app / Http / Controllers / UserController.php
-  const parts = displayPath.split('/');
+  const parts = displayPath.split(/[/\\]/);
   bar.style.display = 'flex';
   bar.innerHTML = parts.map((p, i) =>
     `${i > 0 ? '<span class="breadcrumb-sep">/</span>' : ''}<span class="breadcrumb-part">${escapeHtml(p)}</span>`
@@ -2043,7 +2047,7 @@ function updateBreadcrumbRight() {
   if (state.currentFolder && displayPath.startsWith(state.currentFolder)) {
     displayPath = displayPath.slice(state.currentFolder.length + 1);
   }
-  const parts = displayPath.split('/');
+  const parts = displayPath.split(/[/\\]/);
   bar.style.display = 'flex';
   bar.innerHTML = parts.map((p, i) =>
     `${i > 0 ? '<span class="breadcrumb-sep">/</span>' : ''}<span class="breadcrumb-part">${escapeHtml(p)}</span>`
@@ -2656,8 +2660,6 @@ async function openDiffView(relativePath, absolutePath, fileName, staged) {
   container.innerHTML = '';
 
   const diffEditor = monaco.editor.createDiffEditor(container, {
-    theme: document.documentElement.getAttribute('data-theme') === 'light'
-      ? 'mojavecode-php-light' : 'mojavecode-php-dark',
     readOnly: true,
     automaticLayout: true,
     renderSideBySide: true,
@@ -3754,9 +3756,6 @@ async function openConflictView(relativePath, absolutePath, fileName) {
 
   const ext = fileName.split('.').pop();
   const language = getMonacoLanguage(ext);
-  const theme = document.documentElement.getAttribute('data-theme') === 'light'
-    ? 'mojavecode-php-light' : 'mojavecode-php-dark';
-
   // Limpiar conflict editors anteriores
   const prevConflict = state.openTabs.find((t) => t.path.startsWith('__conflict__') && t.conflictEditors);
   if (prevConflict) {
@@ -3796,7 +3795,6 @@ async function openConflictView(relativePath, absolutePath, fileName) {
   container.appendChild(panes);
 
   const editorOpts = {
-    theme,
     automaticLayout: true,
     fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
     fontSize: 13,
@@ -5858,8 +5856,8 @@ async function toggleQuickOpen() {
     if (state.currentFolder !== targetFolder) return;
     quickOpen.allFiles = files.map((f) => ({
       fullPath: f,
-      relativePath: f.replace(targetFolder + '/', ''),
-      name: f.split('/').pop(),
+      relativePath: f.startsWith(targetFolder) ? f.slice(targetFolder.length).replace(/^[/\\]/, '') : f,
+      name: f.split(/[/\\]/).pop(),
     }));
     quickOpen.cachedFolder = targetFolder;
   }
@@ -5933,7 +5931,7 @@ function renderQuickOpenResults(query) {
 
   quickOpen.resultsList.innerHTML = quickOpen.filtered.map((f, i) => {
     const highlighted = q ? highlightMatch(f.name, q) : escapeHtml(f.name);
-    const dir = f.relativePath.includes('/') ? f.relativePath.replace(/\/[^/]+$/, '') : '';
+    const dir = /[/\\]/.test(f.relativePath) ? f.relativePath.replace(/[/\\][^/\\]+$/, '') : '';
     return `<div class="qo-item${i === 0 ? ' selected' : ''}" data-index="${i}">
       <span class="qo-name">${highlighted}</span>
       <span class="qo-path">${escapeHtml(dir)}</span>

@@ -440,6 +440,17 @@ No additional runtime dependencies for database access (uses `mysql`/`psql` CLI)
 
 ## Changelog
 
+### v3.2.1
+
+- **Cross-Platform Path Utilities** — New `path-utils.js` module with `pathToFileUri()`, `fileUriToPath()`, and `abbreviateHome()` for consistent path handling across macOS, Windows, and Linux
+- **LSP File URI Fix** — Language servers now receive valid `file:///` URIs on Windows (`file:///C:/...` instead of broken `file://C:\...`). Fixes Intelephense and TypeScript LSP initialization on Windows
+- **Xdebug Path Mapping Fix** — Debugger path mapping normalizes separators before comparison and produces valid file URIs. Fixes breakpoint resolution on Windows with Docker
+- **Monaco Theme Fix (Git Diff/Conflict)** — Removed hardcoded `theme: 'mojavecode-php-dark'` from diff editor, conflict resolver, and main editor creation. All Monaco instances now inherit the active global theme (dark, light, or custom)
+- **Terminal cd Escaping** — PowerShell-compatible path escaping for `cd` commands on Windows (`"path"` with backtick-escaped quotes instead of bash single-quote escaping)
+- **Windows Line Endings** — File content splitting uses `/\r?\n/` instead of `'\n'` for search-in-files, symbol extraction, frontmatter parsing, and file tail reading
+- **Breadcrumb/QuickOpen Path Fix** — Path splitting in breadcrumbs, Quick Open, and search results uses `/[/\\]/` regex to handle both Unix and Windows separators
+- **Home Directory Abbreviation** — Recent folders and menu labels use cross-platform home detection (`os.homedir()`) instead of hardcoded `/Users/` regex
+
 ### v3.2.0
 
 - **Windows & Linux Cross-Platform Support** — Full PATH detection for packaged apps on all platforms. Windows: XAMPP, WampServer, Laragon, Chocolatey/Scoop, official MySQL/PostgreSQL installers, Composer global (`%APPDATA%\Composer`), Herd for Windows, Docker Desktop. Linux: snap, system paths, Composer global, PostgreSQL Debian paths. Uses `path.delimiter` for correct PATH separator per OS

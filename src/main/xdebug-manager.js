@@ -17,7 +17,9 @@
 // Referencia: https://xdebug.org/docs/dbgp
 
 const net = require('net');
+const path = require('path');
 const config = require('../config');
+const { pathToFileUri, fileUriToPath } = require('./path-utils');
 
 class XdebugManager {
   /**
@@ -701,25 +703,29 @@ class XdebugManager {
    * Si hay path mappings (Docker/Sail), aplica la conversión.
    */
   _mapLocalToRemote(localPath) {
+    // Normalizar a forward slashes para comparación consistente cross-platform
+    const normalized = localPath.split(path.sep).join('/');
     for (const { remote, local } of this.pathMappings) {
-      if (localPath.startsWith(local)) {
-        return 'file://' + localPath.replace(local, remote);
+      const normalizedLocal = local.split(path.sep).join('/');
+      if (normalized.startsWith(normalizedLocal)) {
+        return 'file://' + normalized.replace(normalizedLocal, remote);
       }
     }
-    return 'file://' + localPath;
+    return pathToFileUri(localPath);
   }
 
   /**
    * Convierte un file URI remoto de Xdebug a path local.
    */
   _mapRemoteToLocal(fileUri) {
-    let path = fileUri.replace(/^file:\/\//, '');
+    let filePath = fileUriToPath(fileUri);
+    const normalized = filePath.split(path.sep).join('/');
     for (const { remote, local } of this.pathMappings) {
-      if (path.startsWith(remote)) {
-        return path.replace(remote, local);
+      if (normalized.startsWith(remote)) {
+        return normalized.replace(remote, local).split('/').join(path.sep);
       }
     }
-    return path;
+    return filePath;
   }
 
   // ── Helpers ───────────────────────────────────────────────

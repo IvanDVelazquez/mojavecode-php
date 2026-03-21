@@ -24,6 +24,7 @@
 const { spawn } = require('child_process');
 const path = require('path');
 const os = require('os');
+const { pathToFileUri } = require('./path-utils');
 
 class LspManager {
   /**
@@ -179,10 +180,10 @@ class LspManager {
             applyEdit: true,
           },
         },
-        rootUri: `file://${workspaceFolder}`,
+        rootUri: pathToFileUri(workspaceFolder),
         workspaceFolders: [
           {
-            uri: `file://${workspaceFolder}`,
+            uri: pathToFileUri(workspaceFolder),
             name: path.basename(workspaceFolder),
           },
         ],

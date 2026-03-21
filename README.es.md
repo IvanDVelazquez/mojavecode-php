@@ -457,6 +457,17 @@ Sin dependencias adicionales de runtime para acceso a base de datos (usa CLI de 
 
 ## Changelog
 
+### v3.2.1
+
+- **Utilidades de Rutas Cross-Platform** — Nuevo módulo `path-utils.js` con `pathToFileUri()`, `fileUriToPath()` y `abbreviateHome()` para manejo consistente de rutas en macOS, Windows y Linux
+- **Fix de URIs en LSP** — Los language servers ahora reciben URIs `file:///` válidas en Windows (`file:///C:/...` en vez de `file://C:\...` roto). Arregla inicialización de Intelephense y TypeScript LSP en Windows
+- **Fix de Path Mapping en Xdebug** — El mapeo de rutas del debugger normaliza separadores antes de comparar y produce URIs válidas. Arregla resolución de breakpoints en Windows con Docker
+- **Fix de Tema Monaco (Git Diff/Conflictos)** — Eliminado `theme: 'mojavecode-php-dark'` hardcodeado del diff editor, conflict resolver y editor principal. Todas las instancias de Monaco heredan el tema global activo (dark, light o custom)
+- **Escaping de Terminal cd** — Escaping compatible con PowerShell para comandos `cd` en Windows (comillas dobles con backtick en vez de single-quote de bash)
+- **Line Endings de Windows** — Splitting de contenido de archivos usa `/\r?\n/` en vez de `'\n'` para búsqueda en archivos, extracción de símbolos, parsing de frontmatter y lectura de archivos
+- **Fix de Rutas en Breadcrumb/QuickOpen** — Splitting de rutas en breadcrumbs, Quick Open y resultados de búsqueda usa regex `/[/\\]/` para manejar separadores Unix y Windows
+- **Abreviación de Home Directory** — Carpetas recientes y labels del menú usan detección cross-platform de home (`os.homedir()`) en vez de regex hardcodeada `/Users/`
+
 ### v3.2.0
 
 - **Soporte Cross-Platform Windows y Linux** — Detección completa de PATH para apps empaquetadas en todas las plataformas. Windows: XAMPP, WampServer, Laragon, Chocolatey/Scoop, instaladores oficiales de MySQL/PostgreSQL, Composer global (`%APPDATA%\Composer`), Herd for Windows, Docker Desktop. Linux: snap, paths del sistema, Composer global, paths de PostgreSQL Debian. Usa `path.delimiter` para separador de PATH correcto por SO
