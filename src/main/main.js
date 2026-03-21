@@ -41,47 +41,101 @@ const db = require('./db-helper');
 // Cuando Electron corre como .app, el PATH es mínimo (/usr/bin:/bin:/usr/sbin:/sbin).
 // Binarios como php, mysql, composer (instalados via Homebrew, MAMP, Herd, etc.)
 // no se encuentran. Reconstruimos el PATH desde las fuentes del sistema + paths comunes.
-if (app.isPackaged && process.platform === 'darwin') {
+// ── PATH fix para apps empaquetadas (macOS, Windows, Linux) ──
+// Cuando Electron empaqueta la app, el PATH se reduce al mínimo del SO
+// (e.g. /usr/bin en Unix, C:\Windows\System32 en Windows).
+// Los binarios de desarrollo (php, mysql, psql, composer, docker) no se
+// encuentran. Acá agregamos los paths comunes de cada plataforma.
+if (app.isPackaged) {
   const home = os.homedir();
-  // Paths comunes donde viven binarios de desarrollo en macOS
-  const extraPaths = [
-    '/opt/homebrew/bin', '/opt/homebrew/sbin',              // Homebrew ARM (M1+)
-    '/opt/homebrew/opt/php@8.1/bin',                        // PHP versionado
-    '/opt/homebrew/opt/php@8.2/bin',
-    '/opt/homebrew/opt/php@8.3/bin',
-    '/opt/homebrew/opt/php@8.4/bin',
-    '/opt/homebrew/opt/mysql/bin',                           // MySQL via Homebrew
-    '/opt/homebrew/opt/mysql-client/bin',
-    '/usr/local/bin', '/usr/local/sbin',                     // Homebrew Intel
-    '/usr/local/opt/php@8.1/bin',
-    '/usr/local/opt/php@8.2/bin',
-    '/usr/local/opt/php@8.3/bin',
-    '/usr/local/opt/mysql/bin',
-    '/usr/local/mysql/bin',                                  // MySQL installer oficial
-    `${home}/.composer/vendor/bin`,                          // Composer global
-    `${home}/Library/Application Support/Herd/bin`,          // Laravel Herd
-    '/Applications/MAMP/bin/php/php8.2.0/bin',               // MAMP
-    '/Applications/MAMP/Library/bin',
-  ];
+  const sep = path.delimiter; // ':' en Unix, ';' en Windows
+  const extraPaths = [];
 
-  // Leer /etc/paths y /etc/paths.d/* (fuente oficial de PATH en macOS)
-  try {
-    const systemPaths = fs.readFileSync('/etc/paths', 'utf8').trim().split('\n');
-    const pathsDir = '/etc/paths.d';
-    if (fs.existsSync(pathsDir)) {
-      for (const file of fs.readdirSync(pathsDir)) {
-        const content = fs.readFileSync(path.join(pathsDir, file), 'utf8').trim();
-        if (content) systemPaths.push(...content.split('\n'));
+  if (process.platform === 'darwin') {
+    // ── macOS ─────────────────────────────────────────────────
+    extraPaths.push(
+      '/opt/homebrew/bin', '/opt/homebrew/sbin',              // Homebrew ARM (M1+)
+      '/opt/homebrew/opt/php@8.1/bin',                        // PHP versionado
+      '/opt/homebrew/opt/php@8.2/bin',
+      '/opt/homebrew/opt/php@8.3/bin',
+      '/opt/homebrew/opt/php@8.4/bin',
+      '/opt/homebrew/opt/mysql/bin',                           // MySQL via Homebrew
+      '/opt/homebrew/opt/mysql-client/bin',
+      '/usr/local/bin', '/usr/local/sbin',                     // Homebrew Intel
+      '/usr/local/opt/php@8.1/bin',
+      '/usr/local/opt/php@8.2/bin',
+      '/usr/local/opt/php@8.3/bin',
+      '/usr/local/opt/mysql/bin',
+      '/usr/local/mysql/bin',                                  // MySQL installer oficial
+      `${home}/.composer/vendor/bin`,                          // Composer global
+      `${home}/Library/Application Support/Herd/bin`,          // Laravel Herd
+      '/Applications/MAMP/bin/php/php8.2.0/bin',               // MAMP
+      '/Applications/MAMP/Library/bin',
+    );
+    // Leer /etc/paths y /etc/paths.d/* (fuente oficial de PATH en macOS)
+    try {
+      const systemPaths = fs.readFileSync('/etc/paths', 'utf8').trim().split('\n');
+      const pathsDir = '/etc/paths.d';
+      if (fs.existsSync(pathsDir)) {
+        for (const file of fs.readdirSync(pathsDir)) {
+          const content = fs.readFileSync(path.join(pathsDir, file), 'utf8').trim();
+          if (content) systemPaths.push(...content.split('\n'));
+        }
       }
-    }
-    extraPaths.push(...systemPaths);
-  } catch { /* ignorar si no se puede leer */ }
+      extraPaths.push(...systemPaths);
+    } catch { /* ignorar si no se puede leer */ }
+
+  } else if (process.platform === 'win32') {
+    // ── Windows ───────────────────────────────────────────────
+    const programFiles = process.env.ProgramFiles || 'C:\\Program Files';
+    const programFilesX86 = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)';
+    const appData = process.env.APPDATA || path.join(home, 'AppData', 'Roaming');
+    const localAppData = process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
+    extraPaths.push(
+      // XAMPP (la más común en Windows)
+      'C:\\xampp\\php',
+      'C:\\xampp\\mysql\\bin',
+      // WampServer
+      'C:\\wamp64\\bin\\php\\php8.2', 'C:\\wamp64\\bin\\php\\php8.3', 'C:\\wamp64\\bin\\php\\php8.4',
+      'C:\\wamp64\\bin\\mysql\\mysql8.0\\bin', 'C:\\wamp64\\bin\\mysql\\mysql8.4\\bin',
+      'C:\\wamp\\bin\\php\\php8.2', 'C:\\wamp\\bin\\php\\php8.3',
+      'C:\\wamp\\bin\\mysql\\mysql8.0\\bin',
+      // Laragon
+      'C:\\laragon\\bin\\php\\php-8.2', 'C:\\laragon\\bin\\php\\php-8.3', 'C:\\laragon\\bin\\php\\php-8.4',
+      'C:\\laragon\\bin\\mysql\\mysql-8.0\\bin', 'C:\\laragon\\bin\\mysql\\mysql-8.4\\bin',
+      // Instaladores oficiales / Chocolatey / Scoop
+      `${programFiles}\\PHP`, `${programFiles}\\PHP\\php8.2`, `${programFiles}\\PHP\\php8.3`,
+      `${programFiles}\\MySQL\\MySQL Server 8.0\\bin`, `${programFiles}\\MySQL\\MySQL Server 8.4\\bin`,
+      `${programFiles}\\PostgreSQL\\16\\bin`, `${programFiles}\\PostgreSQL\\17\\bin`,
+      `${programFilesX86}\\PHP`,
+      // Composer global
+      `${appData}\\Composer\\vendor\\bin`,
+      // Scoop
+      `${home}\\scoop\\shims`,
+      // Laravel Herd for Windows
+      `${localAppData}\\Programs\\Herd\\resources\\bin`,
+      // Docker Desktop CLI
+      `${programFiles}\\Docker\\Docker\\resources\\bin`,
+    );
+
+  } else {
+    // ── Linux ─────────────────────────────────────────────────
+    extraPaths.push(
+      '/usr/local/bin', '/usr/bin', '/usr/sbin',
+      '/usr/local/sbin',
+      '/snap/bin',                                             // Snap packages (Ubuntu)
+      `${home}/.config/composer/vendor/bin`,                   // Composer global (Linux)
+      `${home}/.composer/vendor/bin`,                          // Composer global (alt)
+      '/usr/local/mysql/bin',                                  // MySQL desde tarball
+      '/usr/lib/postgresql/16/bin', '/usr/lib/postgresql/17/bin', // PostgreSQL Debian/Ubuntu
+    );
+  }
 
   // Filtrar solo paths que existen y agregar al PATH actual
   const existing = extraPaths.filter((p) => {
     try { return fs.statSync(p).isDirectory(); } catch { return false; }
   });
-  process.env.PATH = [...new Set([...existing, ...process.env.PATH.split(':')])].join(':');
+  process.env.PATH = [...new Set([...existing, ...process.env.PATH.split(sep)])].join(sep);
 }
 
 // ── Carpetas recientes ──
@@ -699,7 +753,7 @@ function createMenu() {
             dialog.showMessageBox(mainWindow, {
               type: 'info',
               title: 'MojaveCode PHP',
-              message: 'MojaveCode PHP v3.1.0',
+              message: 'MojaveCode PHP v3.2.0',
               detail: 'A lightweight code editor by MojaveWare.\nBuilt with Electron + Monaco + xterm.js',
             });
           },
@@ -947,12 +1001,17 @@ function runProjectCommand(cmd, args, cwd) {
     //   → ./vendor/bin/sail artisan subcommand ...
     // Para Composer: cmd='composer', args=[subcommand, ...]
     //   → ./vendor/bin/sail composer subcommand ...
-    const sailBin = './vendor/bin/sail';
+    //
+    // En Windows: vendor/bin/sail es un bash script que no corre en
+    // PowerShell. Usamos `php vendor/bin/sail` como wrapper.
+    const isWin = process.platform === 'win32';
+    const sailBin = isWin ? 'php' : './vendor/bin/sail';
+    const sailPrefix = isWin ? [path.join('vendor', 'bin', 'sail')] : [];
     if (cmd === 'php' && args[0] === 'artisan') {
-      return runCommand(sailBin, args, cwd); // args ya empieza con 'artisan'
+      return runCommand(sailBin, [...sailPrefix, ...args], cwd);
     }
     if (cmd === 'composer') {
-      return runCommand(sailBin, [cmd, ...args], cwd);
+      return runCommand(sailBin, [...sailPrefix, cmd, ...args], cwd);
     }
   }
 
@@ -968,11 +1027,25 @@ function runProjectCommand(cmd, args, cwd) {
 
 /**
  * Ejecutar un comando del SO (composer, php artisan, etc.)
- * Devuelve { output, error, code }
+ *
+ * En Windows usa shell:true para que cmd.exe resuelva .bat/.cmd
+ * (composer.bat, pint.bat, etc.). En Unix execFile ejecuta directamente.
+ *
+ * @param {string} cmd - Comando a ejecutar
+ * @param {string[]} args - Argumentos
+ * @param {string} cwd - Directorio de trabajo
+ * @returns {Promise<{ output: string, error: string|null, code: number }>}
  */
 function runCommand(cmd, args, cwd) {
+  const opts = {
+    cwd,
+    maxBuffer: config.exec.maxBuffer,
+    timeout: config.exec.timeout,
+    // Windows: shell:true para que cmd.exe resuelva .bat/.cmd (composer, pint, etc.)
+    ...(process.platform === 'win32' ? { shell: true } : {}),
+  };
   return new Promise((resolve) => {
-    execFile(cmd, args, { cwd, maxBuffer: config.exec.maxBuffer, timeout: config.exec.timeout }, (err, stdout, stderr) => {
+    execFile(cmd, args, opts, (err, stdout, stderr) => {
       if (err) {
         resolve({ output: stdout, error: stderr || err.message, code: err.code });
       } else {
@@ -1441,7 +1514,7 @@ ipcMain.on('pty:cd', (event, id, cwd) => {
 // ────────────────────────────────────────────
 function runGit(args, cwd) {
   return new Promise((resolve) => {
-    execFile('git', args, { cwd, maxBuffer: config.exec.maxBuffer }, (err, stdout, stderr) => {
+    execFile('git', args, { cwd, maxBuffer: config.exec.maxBuffer, ...(process.platform === 'win32' ? { shell: true } : {}) }, (err, stdout, stderr) => {
       if (err) {
         resolve({ error: err.message, stderr });
       } else {
@@ -2239,13 +2312,13 @@ ipcMain.handle('php:format', async (event, filePath) => {
 
   if (projectCapabilities.hasPint) {
     if (dockerContainer && dockerWorkdir) {
-      // Convertir ruta local a ruta dentro del contenedor
       const relative = path.relative(root, filePath);
       const containerFile = path.posix.join(dockerWorkdir, relative);
       return runProjectCommand('vendor/bin/pint', [containerFile, '--no-interaction'], root);
     }
+    // Local: usar php como runner en todas las plataformas (execFile no ejecuta .bat en Windows)
     const pintBin = path.join(root, 'vendor', 'bin', 'pint');
-    return runCommand(pintBin, [filePath, '--no-interaction'], root);
+    return runCommand('php', [pintBin, filePath, '--no-interaction'], root);
   } else if (projectCapabilities.hasCsFixer) {
     if (dockerContainer && dockerWorkdir) {
       const relative = path.relative(root, filePath);
@@ -2253,7 +2326,7 @@ ipcMain.handle('php:format', async (event, filePath) => {
       return runProjectCommand('vendor/bin/php-cs-fixer', ['fix', containerFile, '--no-interaction', '--quiet'], root);
     }
     const fixerBin = path.join(root, 'vendor', 'bin', 'php-cs-fixer');
-    return runCommand(fixerBin, ['fix', filePath, '--no-interaction', '--quiet'], root);
+    return runCommand('php', [fixerBin, 'fix', filePath, '--no-interaction', '--quiet'], root);
   }
   return { error: 'No PHP formatter found' };
 });
@@ -2273,9 +2346,10 @@ ipcMain.handle('phpunit:run', async (event, args) => {
     const cmdArgs = [...(args || []), '--colors=always'];
     return runProjectCommand('vendor/bin/phpunit', cmdArgs, root);
   }
+  // Local: usar php como runner en todas las plataformas
   const phpunitBin = path.join(root, 'vendor', 'bin', 'phpunit');
   const cmdArgs = [...(args || []), '--colors=always'];
-  return runCommand(phpunitBin, cmdArgs, root);
+  return runCommand('php', [phpunitBin, ...cmdArgs], root);
 });
 
 // ────────────────────────────────────────────
@@ -2533,7 +2607,7 @@ ipcMain.handle('db:export', async (event, type, tableName, connKey) => {
       const args = ['-h', cfg.host, '-p', cfg.port, '-U', cfg.username, cfg.database];
       const result = await new Promise((resolve) => {
         const { execFile } = require('child_process');
-        execFile('pg_dump', args, { env: pgEnv, timeout: 120000, maxBuffer: 50 * 1024 * 1024 }, (err, stdout, stderr) => {
+        execFile('pg_dump', args, { env: pgEnv, timeout: 120000, maxBuffer: 50 * 1024 * 1024, ...(process.platform === 'win32' ? { shell: true } : {}) }, (err, stdout, stderr) => {
           if (err && !stdout) return resolve({ error: stderr || err.message });
           resolve({ output: stdout });
         });
@@ -2554,7 +2628,7 @@ ipcMain.handle('db:export', async (event, type, tableName, connKey) => {
     if (cfg.password) args.push(`-p${cfg.password}`);
     const result = await new Promise((resolve) => {
       const { execFile } = require('child_process');
-      execFile('mysqldump', args, { timeout: 120000, maxBuffer: 50 * 1024 * 1024 }, (err, stdout, stderr) => {
+      execFile('mysqldump', args, { timeout: 120000, maxBuffer: 50 * 1024 * 1024, ...(process.platform === 'win32' ? { shell: true } : {}) }, (err, stdout, stderr) => {
         // mysqldump manda warnings a stderr incluso cuando tiene éxito.
         // Solo tratar como error si no hay output Y hay error.
         if (err && !stdout) return resolve({ error: stderr || err.message });
@@ -3197,6 +3271,7 @@ ipcMain.handle('composer:createProject', async (event, parentDir, projectName) =
       cwd: parentDir,
       maxBuffer: config.exec.maxBuffer,
       timeout: 600000, // 10 minutos
+      ...(process.platform === 'win32' ? { shell: true } : {}),
     }, (err, stdout, stderr) => {
       if (err) {
         resolve({ output: stdout, error: stderr || err.message, code: err.code });

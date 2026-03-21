@@ -150,7 +150,7 @@ function execDb(dbConfig, sql, options = {}) {
       args.push('-t', '-A', '-c', sql);
     }
     return new Promise((resolve) => {
-      execFile('psql', args, { env: pgEnv, timeout }, (err, stdout, stderr) => {
+      execFile('psql', args, { env: pgEnv, timeout, ...(process.platform === 'win32' ? { shell: true } : {}) }, (err, stdout, stderr) => {
         if (err) return resolve({ error: stderr || err.message });
         resolve({ output: stdout.trim() });
       });
@@ -166,7 +166,7 @@ function execDb(dbConfig, sql, options = {}) {
     args.push('-N', '-e', sql);
   }
   return new Promise((resolve) => {
-    execFile('mysql', args, { timeout }, (err, stdout, stderr) => {
+    execFile('mysql', args, { timeout, ...(process.platform === 'win32' ? { shell: true } : {}) }, (err, stdout, stderr) => {
       if (err) return resolve({ error: stderr || err.message });
       resolve({ output: stdout.trim() });
     });

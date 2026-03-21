@@ -457,6 +457,11 @@ Sin dependencias adicionales de runtime para acceso a base de datos (usa CLI de 
 
 ## Changelog
 
+### v3.2.0
+
+- **Soporte Cross-Platform Windows y Linux** — Detección completa de PATH para apps empaquetadas en todas las plataformas. Windows: XAMPP, WampServer, Laragon, Chocolatey/Scoop, instaladores oficiales de MySQL/PostgreSQL, Composer global (`%APPDATA%\Composer`), Herd for Windows, Docker Desktop. Linux: snap, paths del sistema, Composer global, paths de PostgreSQL Debian. Usa `path.delimiter` para separador de PATH correcto por SO
+- **Ejecución de Comandos en Windows** — Todos los comandos CLI (`composer`, `mysql`, `psql`, `git`, `pg_dump`, `mysqldump`, herramientas vendor bin) ahora usan `shell: true` en Windows para que `cmd.exe` resuelva wrappers `.bat`/`.cmd`. Herramientas vendor bin (Pint, CS Fixer, PHPUnit) corren via `php` como runner para compatibilidad cross-platform. Sail en Windows usa `php vendor/bin/sail` en vez del bash script directo
+
 ### v3.1.0
 
 - **Barra de Menú en Titlebar (Windows/Linux)** — Menú completo de la aplicación renderizado inline en el titlebar (File, Edit, View, Terminal, Git, Tema, Composer, Artisan, PHP, Help) en plataformas sin barra de menú nativa. Click en cualquier label abre su dropdown con atajos de teclado, submenús anidados, estados checked e items deshabilitados. Hover cambia entre menús abiertos. Se actualiza automáticamente cuando cambian las capacidades del proyecto
