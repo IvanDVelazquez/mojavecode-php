@@ -46,8 +46,18 @@
     },
     "win": {
       "target": "nsis",
+      "icon": "assets/icon.ico",
       "signingHashAlgorithms": null,
       "sign": null
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "MojaveCode PHP",
+      "uninstallDisplayName": "MojaveCode PHP"
     },
     "linux": {
       "target": "AppImage"

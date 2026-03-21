@@ -1,0 +1,134 @@
+# ══════════════════════════════════════════════════════════════
+# Build Installers — MojaveCode PHP (Windows, macOS, Linux)
+# ══════════════════════════════════════════════════════════════
+#
+# Triggers on version tags (v*) or manual dispatch.
+# Each platform builds on its native runner because node-pty
+# (C++ native module) must compile with platform-specific tools.
+#
+# Output:
+#   Windows  → .exe  (NSIS installer with wizard)
+#   macOS    → .dmg  (drag-to-Applications disk image)
+#   Linux    → .AppImage (portable, no install needed)
+#
+# All artifacts are uploaded to a single GitHub Release.
+# ══════════════════════════════════════════════════════════════
+
+name: Build Installers
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  # ── Windows ─────────────────────────────────────────────────
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Windows icon (.ico)
+        run: npx --yes png-to-ico assets/icon.png > assets/icon.ico
+
+      - name: Build Windows installer
+        run: npm run build:win
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-windows
+          path: dist/*.exe
+          retention-days: 30
+
+  # ── macOS ───────────────────────────────────────────────────
+  build-macos:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build macOS DMG
+        run: npm run build:mac
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-macos
+          path: dist/*.dmg
+          retention-days: 30
+
+  # ── Linux ───────────────────────────────────────────────────
+  build-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Linux AppImage
+        run: npm run build:linux
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-linux
+          path: dist/*.AppImage
+          retention-days: 30
+
+  # ── Release ─────────────────────────────────────────────────
+  # Collects all 3 platform artifacts into a single GitHub Release
+  release:
+    needs: [build-windows, build-macos, build-linux]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
