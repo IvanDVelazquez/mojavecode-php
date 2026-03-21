@@ -12,6 +12,10 @@
 #   Linux    → .AppImage (portable, no install needed)
 #
 # All artifacts are uploaded to a single GitHub Release.
+#
+# NOTE: GH_TOKEN is intentionally NOT passed to electron-builder
+# to prevent it from auto-publishing. The "release" job handles
+# publishing with the correct permissions.
 # ══════════════════════════════════════════════════════════════
 
 name: Build Installers
@@ -34,7 +38,6 @@ jobs:
         with:
           python-version: '3.12'
 
-      # node-gyp uses distutils which was removed in Python 3.12+
       - name: Install setuptools (provides distutils for node-gyp)
         run: pip install setuptools
 
@@ -51,8 +54,6 @@ jobs:
 
       - name: Build Windows installer
         run: npm run build:win
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -85,8 +86,6 @@ jobs:
 
       - name: Build macOS DMG
         run: npm run build:mac
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -119,8 +118,6 @@ jobs:
 
       - name: Build Linux AppImage
         run: npm run build:linux
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
