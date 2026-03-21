@@ -153,46 +153,29 @@ body.theme-ready {
 .titlebar-btn.close:hover { background: var(--accent-red); color: #fff; }
 
 /* ════════════════════════════════════════════════════════════
-   HAMBURGER MENU — Windows/Linux fallback for native menu bar
-   Renders the full app menu as a dropdown from the titlebar.
+   TITLEBAR MENU BAR — Windows/Linux inline menu
+   Renders top-level menu labels (File, Edit, View…) directly
+   in the titlebar. Clicking one opens a dropdown submenu.
    On macOS the native menu bar is used instead.
    ════════════════════════════════════════════════════════════ */
-#titlebar-menu-btn {
-  -webkit-app-region: no-drag;
-  width: 36px;
-  position: relative;
-}
-
-#titlebar-menu-dropdown {
-  position: absolute;
-  top: 34px;
-  left: 44px;
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  box-shadow: 0 6px 24px rgba(0,0,0,0.4);
-  z-index: 10000;
-  min-width: 180px;
-  padding: 4px 0;
-  font-family: var(--font-ui);
-  font-size: 12px;
-}
-
-/* Top-level menu bar row (File, Edit, View...) */
-.menu-bar {
+#titlebar-menubar {
   display: flex;
+  align-items: center;
+  -webkit-app-region: no-drag;
   gap: 0;
-  padding: 2px 4px;
-  border-bottom: 1px solid var(--border);
+  margin-right: 8px;
 }
 
 .menu-bar-item {
-  padding: 4px 10px;
+  padding: 4px 8px;
   color: var(--text-secondary);
   cursor: pointer;
   border-radius: 3px;
   white-space: nowrap;
   user-select: none;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  position: relative;
 }
 
 .menu-bar-item:hover,
@@ -201,9 +184,19 @@ body.theme-ready {
   color: var(--text-primary);
 }
 
-/* Submenu panel that appears below a menu-bar-item */
-.menu-submenu {
+/* Dropdown submenu that appears below a menu-bar-item */
+#titlebar-menu-dropdown {
+  position: absolute;
+  top: 34px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 6px 24px rgba(0,0,0,0.4);
+  z-index: 10000;
+  min-width: 200px;
   padding: 4px 0;
+  font-family: var(--font-ui);
+  font-size: 12px;
 }
 
 .menu-item {

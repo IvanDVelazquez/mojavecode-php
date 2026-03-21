@@ -9108,35 +9108,35 @@ function initClaudePanel() {
 }
 
 // ┌──────────────────────────────────────────────────┐
-// │  HAMBURGER MENU (Windows/Linux)                  │
-// │  Renderiza el menú nativo de Electron como un    │
-// │  dropdown HTML en el titlebar. Solo se activa    │
-// │  en plataformas sin barra de menú nativa.        │
+// │  TITLEBAR MENU BAR (Windows/Linux)               │
+// │  Renderiza el menú nativo de Electron como       │
+// │  labels inline en el titlebar (File Edit View…). │
+// │  Click en uno abre un dropdown con su submenu.   │
+// │  Solo se activa en plataformas sin menú nativo.  │
 // │                                                  │
 // │  FLUJO:                                          │
 // │  1. Main envía 'menu:structure' con la estructura│
 // │     serializada cada vez que se reconstruye.     │
-// │  2. Renderer renderiza las top-level labels como │
-// │     una barra horizontal. Click en una abre su   │
-// │     submenu.                                     │
+// │  2. Renderer renderiza las top-level labels en   │
+// │     #titlebar-menubar. Click abre dropdown.      │
 // │  3. Click en un item → 'menu:execute' al main    │
 // │     con el path de labels (['File','Save']).     │
 // │  4. Main busca el item en Menu.getApplicationMenu│
 // │     y ejecuta su click handler nativo.           │
 // └──────────────────────────────────────────────────┘
 function initHamburgerMenu() {
-  const btn = document.getElementById('titlebar-menu-btn');
+  const menubar = document.getElementById('titlebar-menubar');
   const dropdown = document.getElementById('titlebar-menu-dropdown');
   let menuData = [];
   let isOpen = false;
   let activeTopIndex = -1;
 
-  // Mostrar el botón hamburguesa
-  btn.style.display = 'flex';
+  // Mostrar la barra de menú
+  menubar.style.display = 'flex';
 
-  // Cerrar el menú al hacer click fuera
+  // Cerrar el dropdown al hacer click fuera
   document.addEventListener('mousedown', (e) => {
-    if (isOpen && !dropdown.contains(e.target) && e.target !== btn && !btn.contains(e.target)) {
+    if (isOpen && !dropdown.contains(e.target) && !menubar.contains(e.target)) {
       closeMenu();
     }
   });
@@ -9146,67 +9146,34 @@ function initHamburgerMenu() {
     if (e.key === 'Escape' && isOpen) closeMenu();
   });
 
-  // Toggle menú al clickear hamburguesa
-  btn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    if (isOpen) { closeMenu(); } else { openMenu(); }
-  });
-
   function closeMenu() {
     dropdown.style.display = 'none';
     isOpen = false;
     activeTopIndex = -1;
+    menubar.querySelectorAll('.menu-bar-item').forEach(el => el.classList.remove('active'));
   }
 
-  function openMenu() {
-    if (menuData.length === 0) {
-      window.api.menuRequestStructure();
-      return;
-    }
-    renderMenu();
-    dropdown.style.display = 'block';
+  function openSubmenu(index) {
+    if (!menuData[index]?.submenu) return;
+    activeTopIndex = index;
     isOpen = true;
-  }
 
-  function renderMenu() {
-    // Barra horizontal con los items de primer nivel (File, Edit, View...)
-    let html = '<div class="menu-bar">';
-    menuData.forEach((top, i) => {
-      if (top.type === 'separator') return;
-      html += `<div class="menu-bar-item${i === activeTopIndex ? ' active' : ''}" data-index="${i}">${escapeHtml(top.label)}</div>`;
-    });
-    html += '</div>';
-
-    // Submenu del item activo
-    if (activeTopIndex >= 0 && menuData[activeTopIndex]?.submenu) {
-      html += '<div class="menu-submenu">';
-      html += renderSubmenuItems(menuData[activeTopIndex].submenu, [menuData[activeTopIndex].label]);
-      html += '</div>';
-    }
-
-    dropdown.innerHTML = html;
-
-    // Event delegation para los items de la barra
-    dropdown.querySelectorAll('.menu-bar-item').forEach(el => {
-      el.addEventListener('mouseenter', () => {
-        if (isOpen && activeTopIndex >= 0) {
-          activeTopIndex = parseInt(el.dataset.index);
-          renderMenu();
-        }
-      });
-      el.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const idx = parseInt(el.dataset.index);
-        if (activeTopIndex === idx) {
-          activeTopIndex = -1;
-        } else {
-          activeTopIndex = idx;
-        }
-        renderMenu();
-      });
+    // Marcar item activo
+    menubar.querySelectorAll('.menu-bar-item').forEach((el, i) => {
+      el.classList.toggle('active', i === index);
     });
 
-    // Event delegation para los items del submenu
+    // Posicionar dropdown debajo del item clickeado
+    const barItem = menubar.querySelectorAll('.menu-bar-item')[index];
+    const rect = barItem.getBoundingClientRect();
+    dropdown.style.left = rect.left + 'px';
+    dropdown.style.top = '34px';
+
+    // Renderizar submenu
+    dropdown.innerHTML = renderSubmenuItems(menuData[index].submenu, [menuData[index].label]);
+    dropdown.style.display = 'block';
+
+    // Bind clicks en items del submenu
     dropdown.querySelectorAll('.menu-item[data-path]').forEach(el => {
       el.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -9215,6 +9182,24 @@ function initHamburgerMenu() {
         window.api.menuExecute(path);
         closeMenu();
       });
+    });
+  }
+
+  function renderMenuBar() {
+    menubar.innerHTML = '';
+    menuData.forEach((top, i) => {
+      if (top.type === 'separator' || !top.label) return;
+      const el = document.createElement('div');
+      el.className = 'menu-bar-item';
+      el.textContent = top.label;
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (activeTopIndex === i && isOpen) { closeMenu(); } else { openSubmenu(i); }
+      });
+      el.addEventListener('mouseenter', () => {
+        if (isOpen && activeTopIndex !== i) openSubmenu(i);
+      });
+      menubar.appendChild(el);
     });
   }
 
@@ -9253,8 +9238,8 @@ function initHamburgerMenu() {
   // Recibir estructura del menú desde el main process
   window.api.onMenuStructure((data) => {
     menuData = data;
-    // Si el menú está abierto, re-renderizarlo (e.g. después de detectar proyecto)
-    if (isOpen) renderMenu();
+    renderMenuBar();
+    if (isOpen) openSubmenu(activeTopIndex);
   });
 
   // Pedir la estructura del menú al iniciar

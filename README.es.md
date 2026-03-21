@@ -459,7 +459,7 @@ Sin dependencias adicionales de runtime para acceso a base de datos (usa CLI de 
 
 ### v3.1.0
 
-- **Menú Hamburguesa (Windows/Linux)** — Menú completo de la aplicación renderizado como dropdown desde el titlebar en plataformas sin barra de menú nativa. Replica la estructura del menú de macOS (File, Edit, View, Terminal, Git, Tema, Composer, Artisan, PHP, Help) con atajos de teclado, submenús anidados, estados checked e items deshabilitados. Se actualiza automáticamente cuando cambian las capacidades del proyecto
+- **Barra de Menú en Titlebar (Windows/Linux)** — Menú completo de la aplicación renderizado inline en el titlebar (File, Edit, View, Terminal, Git, Tema, Composer, Artisan, PHP, Help) en plataformas sin barra de menú nativa. Click en cualquier label abre su dropdown con atajos de teclado, submenús anidados, estados checked e items deshabilitados. Hover cambia entre menús abiertos. Se actualiza automáticamente cuando cambian las capacidades del proyecto
 - **CI/CD Installers** — Workflow de GitHub Actions que compila instaladores nativos por plataforma en cada tag de versión: `.exe` (wizard NSIS) para Windows, `.dmg` para macOS, `.AppImage` para Linux. Los tres se suben a un único GitHub Release para distribución fácil
 
 ### v3.0.1
