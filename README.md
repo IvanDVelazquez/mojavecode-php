@@ -440,6 +440,11 @@ No additional runtime dependencies for database access (uses `mysql`/`psql` CLI)
 
 ## Changelog
 
+### v3.1.0
+
+- **Hamburger Menu (Windows/Linux)** — Full application menu rendered as a dropdown from the titlebar on platforms without a native menu bar. Mirrors the macOS menu structure (File, Edit, View, Terminal, Git, Tema, Composer, Artisan, PHP, Help) with keyboard shortcut labels, nested submenus, checked states, and disabled items. Menu structure auto-updates when project capabilities change
+- **CI/CD Installers** — GitHub Actions workflow builds platform-native installers on every version tag: `.exe` (NSIS wizard) for Windows, `.dmg` for macOS, `.AppImage` for Linux. All three are uploaded to a single GitHub Release for easy distribution
+
 ### v3.0.1
 
 - **Theme Flash Fix** — New windows open with the correct custom theme from the first frame. Uses `show: false` + IPC handshake (`theme:ready`) to prevent the dark theme flash on startup and new windows

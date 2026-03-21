@@ -31,6 +31,11 @@
     <div id="titlebar-logo">
       <span class="logo-icon">MC_</span>
     </div>
+    <!-- Hamburger menu button — visible only on Windows/Linux (no native menu bar) -->
+    <button id="titlebar-menu-btn" class="titlebar-btn" title="Menu" style="display:none">
+      <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M1 3h14v1.5H1V3zm0 4.25h14v1.5H1v-1.5zm0 4.25h14V13H1v-1.5z"/></svg>
+    </button>
+    <div id="titlebar-menu-dropdown" style="display:none"></div>
     <div id="titlebar-title">MojaveCode PHP</div>
     <div id="titlebar-controls">
       <button id="btn-minimize" class="titlebar-btn" title="Minimize">─</button>

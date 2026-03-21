@@ -699,7 +699,7 @@ function createMenu() {
             dialog.showMessageBox(mainWindow, {
               type: 'info',
               title: 'MojaveCode PHP',
-              message: 'MojaveCode PHP v3.0.1',
+              message: 'MojaveCode PHP v3.1.0',
               detail: 'A lightweight code editor by MojaveWare.\nBuilt with Electron + Monaco + xterm.js',
             });
           },
@@ -714,6 +714,52 @@ function createMenu() {
 
   const menu = Menu.buildFromTemplate(template);
   Menu.setApplicationMenu(menu);
+
+  // ── Enviar estructura del menú al renderer (Windows/Linux hamburger menu) ──
+  // En macOS el menú nativo es suficiente. En Windows/Linux no hay barra de
+  // menú nativa con frame:false, así que el renderer dibuja un menú propio.
+  if (process.platform !== 'darwin' && mainWindow && !mainWindow.isDestroyed()) {
+    const menuData = serializeMenu(menu);
+    mainWindow.webContents.send('menu:structure', menuData);
+  }
+}
+
+/**
+ * Serializa el menú de Electron a un array plano para el renderer.
+ * Solo incluye label, accelerator, type, enabled, checked y submenu.
+ * Los callbacks (click) se ejecutan via 'menu:execute' IPC.
+ */
+function serializeMenu(menu) {
+  return menu.items
+    .filter(item => item.visible !== false)
+    .map(item => serializeMenuItem(item));
+}
+
+/**
+ * Serializa un MenuItem recursivamente.
+ * Convierte accelerators de Electron (CmdOrCtrl) al formato de la plataforma.
+ *
+ * @param {Electron.MenuItem} item
+ * @returns {{ label: string, type: string, enabled: boolean, checked: boolean, accelerator?: string, submenu?: array }}
+ */
+function serializeMenuItem(item) {
+  const result = {
+    label: item.label || '',
+    type: item.type || 'normal',
+    enabled: item.enabled !== false,
+    checked: !!item.checked,
+  };
+  if (item.accelerator) {
+    result.accelerator = item.accelerator
+      .replace('CmdOrCtrl', process.platform === 'darwin' ? 'Cmd' : 'Ctrl')
+      .replace('CommandOrControl', process.platform === 'darwin' ? 'Cmd' : 'Ctrl');
+  }
+  if (item.submenu && item.submenu.items) {
+    result.submenu = item.submenu.items
+      .filter(sub => sub.visible !== false)
+      .map(sub => serializeMenuItem(sub));
+  }
+  return result;
 }
 
 // ────────────────────────────────────────────
@@ -3213,6 +3259,34 @@ ipcMain.on('window:maximize', () => {
 });
 ipcMain.on('window:close', () => mainWindow?.close());
 ipcMain.on('window:new', () => spawnNewWindow());
+
+// ── Hamburger menu: ejecutar un item del menú por su path de labels ──
+// El renderer envía ['File', 'Save'] y buscamos el item en el menú nativo.
+ipcMain.on('menu:execute', (event, labelPath) => {
+  const appMenu = Menu.getApplicationMenu();
+  if (!appMenu) return;
+  let items = appMenu.items;
+  for (let i = 0; i < labelPath.length; i++) {
+    const item = items.find(m => m.label === labelPath[i]);
+    if (!item) return;
+    if (i === labelPath.length - 1) {
+      // Ejecutar el click del item encontrado
+      if (item.click) item.click(item, mainWindow, event);
+    } else if (item.submenu) {
+      items = item.submenu.items;
+    } else {
+      return;
+    }
+  }
+});
+
+// ── Hamburger menu: pedir re-envío de estructura del menú ──
+ipcMain.on('menu:requestStructure', () => {
+  const appMenu = Menu.getApplicationMenu();
+  if (appMenu && mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('menu:structure', serializeMenu(appMenu));
+  }
+});
 
 // ────────────────────────────────────────────
 // 17. APP LIFECYCLE — Inicio, activación y cierre de Electron

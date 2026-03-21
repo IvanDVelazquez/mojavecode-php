@@ -457,6 +457,11 @@ Sin dependencias adicionales de runtime para acceso a base de datos (usa CLI de 
 
 ## Changelog
 
+### v3.1.0
+
+- **Menú Hamburguesa (Windows/Linux)** — Menú completo de la aplicación renderizado como dropdown desde el titlebar en plataformas sin barra de menú nativa. Replica la estructura del menú de macOS (File, Edit, View, Terminal, Git, Tema, Composer, Artisan, PHP, Help) con atajos de teclado, submenús anidados, estados checked e items deshabilitados. Se actualiza automáticamente cuando cambian las capacidades del proyecto
+- **CI/CD Installers** — Workflow de GitHub Actions que compila instaladores nativos por plataforma en cada tag de versión: `.exe` (wizard NSIS) para Windows, `.dmg` para macOS, `.AppImage` para Linux. Los tres se suben a un único GitHub Release para distribución fácil
+
 ### v3.0.1
 
 - **Fix de flash de tema** — Las ventanas nuevas se abren con el tema custom correcto desde el primer frame. Usa `show: false` + handshake IPC (`theme:ready`) para prevenir el flash del tema dark al iniciar o abrir nuevas ventanas

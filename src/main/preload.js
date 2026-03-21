@@ -92,6 +92,11 @@ contextBridge.exposeInMainWorld('api', {
   windowClose: () => ipcRenderer.send('window:close'),
   windowNew: () => ipcRenderer.send('window:new'),
 
+  // ── Hamburger menu (Windows/Linux) ──
+  onMenuStructure: (callback) => ipcRenderer.on('menu:structure', (_, data) => callback(data)),
+  menuExecute: (labelPath) => ipcRenderer.send('menu:execute', labelPath),
+  menuRequestStructure: () => ipcRenderer.send('menu:requestStructure'),
+
   // ── Menu events (main → renderer) ──
   onMenuSave: (callback) => ipcRenderer.on('menu:save', callback),
   // Auto Save: el main avisa al renderer cuando el usuario activa/desactiva
