@@ -440,6 +440,12 @@ No additional runtime dependencies for database access (uses `mysql`/`psql` CLI)
 
 ## Changelog
 
+### v3.3.0
+
+- **Ask Claude (Error Log)** — ERROR and WARNING entries in the Error Log now show an "Ask Claude" button when the `claude` CLI is detected in PATH. Clicking it opens the integrated terminal and pipes the error + stack trace to `claude -p` for instant analysis and fix suggestions
+- **Claude CLI Detection** — Project capabilities now detect whether the `claude` CLI is available, enabling AI-assisted features across the editor
+- **File Watcher Atomic Save Fix** — File watchers now survive atomic save operations (rename-over-original pattern used by vim, git, formatters). On rename events the watcher is recreated automatically, preventing stale watchers that missed external changes
+
 ### v3.2.1
 
 - **Cross-Platform Path Utilities** — New `path-utils.js` module with `pathToFileUri()`, `fileUriToPath()`, and `abbreviateHome()` for consistent path handling across macOS, Windows, and Linux

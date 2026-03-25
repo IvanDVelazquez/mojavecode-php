@@ -755,7 +755,7 @@ function createMenu() {
             dialog.showMessageBox(mainWindow, {
               type: 'info',
               title: 'MojaveCode PHP',
-              message: 'MojaveCode PHP v3.2.1',
+              message: 'MojaveCode PHP v3.3.0',
               detail: 'A lightweight code editor by MojaveWare.\nBuilt with Electron + Monaco + xterm.js',
             });
           },
@@ -899,7 +899,9 @@ function detectProjectCapabilities(folderPath) {
   projectCapabilities.hasSail = hasSailFiles && !parentDockerCoversProject;
   projectCapabilities.sailEnabled = projectCapabilities.hasSail;
 
-  // Detectar Claude CLI en PATH
+  // ── Detectar Claude CLI en PATH ─────────────────────────────────
+  // Habilita el botón "Ask Claude" en el Error Log para enviar errores
+  // directamente al CLI de Claude desde la terminal integrada.
   projectCapabilities.hasClaude = false;
   try {
     const cmd = process.platform === 'win32' ? 'where claude' : 'which claude';

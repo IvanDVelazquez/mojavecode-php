@@ -457,6 +457,12 @@ Sin dependencias adicionales de runtime para acceso a base de datos (usa CLI de 
 
 ## Changelog
 
+### v3.3.0
+
+- **Ask Claude (Error Log)** — Las entradas ERROR y WARNING en el Error Log ahora muestran un botón "Ask Claude" cuando se detecta el CLI `claude` en PATH. Al hacer click abre la terminal integrada y envía el error + stack trace a `claude -p` para análisis instantáneo y sugerencias de fix
+- **Detección de Claude CLI** — Las capacidades del proyecto ahora detectan si el CLI `claude` está disponible, habilitando features asistidos por IA en el editor
+- **Fix de File Watcher con Atomic Save** — Los file watchers ahora sobreviven operaciones de guardado atómico (patrón rename-over-original usado por vim, git, formatters). En eventos de rename el watcher se recrea automáticamente, previniendo watchers muertos que no detectaban cambios externos
+
 ### v3.2.1
 
 - **Utilidades de Rutas Cross-Platform** — Nuevo módulo `path-utils.js` con `pathToFileUri()`, `fileUriToPath()` y `abbreviateHome()` para manejo consistente de rutas en macOS, Windows y Linux

@@ -8240,7 +8240,13 @@ async function loadFormattedLog(filePath) {
     }
   });
 
-  // Ask Claude — abre una terminal y envía el error como prompt a Claude CLI
+  // ── Ask Claude — send error to Claude CLI in terminal ───────────
+  //
+  // When the project has the `claude` CLI available in PATH, each
+  // ERROR and WARNING log entry renders an "Ask Claude" button.
+  // Clicking it builds a prompt with the error message + stack trace
+  // (truncated to ~4000 chars), opens/focuses the integrated terminal,
+  // and pipes the prompt through `claude -p` for instant analysis.
   container.querySelectorAll('.log-v-ask-claude').forEach((btn) => {
     btn.addEventListener('click', async (ev) => {
       ev.stopPropagation();
