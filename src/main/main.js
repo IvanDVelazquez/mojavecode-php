@@ -221,6 +221,7 @@ let projectCapabilities = {
   dockerWorkdir: null, // workdir dentro del contenedor
   hasSail: false,    // vendor/bin/sail presente
   sailEnabled: false, // usuario habilitó modo Sail (auto-activado al detectar Sail)
+  hasClaude: false,  // claude CLI disponible en PATH
   formatOnSave: false, // desactivado por defecto
   autoSave: false, // auto-save desactivado por defecto
   projectRoot: null,
@@ -898,6 +899,14 @@ function detectProjectCapabilities(folderPath) {
   projectCapabilities.hasSail = hasSailFiles && !parentDockerCoversProject;
   projectCapabilities.sailEnabled = projectCapabilities.hasSail;
 
+  // Detectar Claude CLI en PATH
+  projectCapabilities.hasClaude = false;
+  try {
+    const cmd = process.platform === 'win32' ? 'where claude' : 'which claude';
+    require('child_process').execSync(cmd, { stdio: 'ignore' });
+    projectCapabilities.hasClaude = true;
+  } catch { /* claude not in PATH */ }
+
   // Reset format on save al cambiar de proyecto
   projectCapabilities.formatOnSave = false;
 
@@ -1188,15 +1197,48 @@ function markRecentlySaved(filePath) {
 /**
  * Empieza a observar un archivo. Si ya está siendo observado, no hace nada.
  * Cuando detecta un cambio externo, envía 'file:changed' al renderer.
+ *
+ * NOTA SOBRE macOS Y RENAME:
+ * ──────────────────────────
+ * Muchos editores y herramientas (vim, git, formatters) guardan archivos
+ * con un patrón atómico: escriben a un temp y luego renombran sobre el
+ * original. Esto dispara un evento 'rename' en fs.watch() y deja el
+ * watcher muerto (apuntaba al inode viejo que ya no existe en esa ruta).
+ *
+ * Para solucionarlo: al recibir 'rename', cerramos el watcher viejo y
+ * recreamos uno nuevo tras un breve delay (para que el archivo ya exista
+ * en su ubicación final).
  */
-ipcMain.handle('watch:add', (event, filePath) => {
-  if (fileWatchers.has(filePath)) return;
+function startFileWatcher(filePath) {
+  // Limpiar watcher previo si existe
+  const oldWatcher = fileWatchers.get(filePath);
+  if (oldWatcher) {
+    try { oldWatcher.close(); } catch {}
+    fileWatchers.delete(filePath);
+  }
+
+  if (!fs.existsSync(filePath)) return;
+
   try {
     const watcher = fs.watch(filePath, (eventType) => {
-      if (eventType !== 'change') return;
       if (recentlySaved.has(filePath)) return;
 
-      // Debounce: ignorar disparos duplicados del mismo evento
+      if (eventType === 'rename') {
+        // El archivo fue reemplazado (atomic save) — el watcher actual
+        // ya no sirve. Recrear después de un breve delay para que el
+        // nuevo archivo ya exista en disco.
+        clearTimeout(watchDebounce.get(filePath));
+        watchDebounce.set(filePath, setTimeout(() => {
+          watchDebounce.delete(filePath);
+          startFileWatcher(filePath);
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('file:changed', filePath);
+          }
+        }, 300));
+        return;
+      }
+
+      // eventType === 'change' — modificación in-place normal
       clearTimeout(watchDebounce.get(filePath));
       watchDebounce.set(filePath, setTimeout(() => {
         watchDebounce.delete(filePath);
@@ -1215,6 +1257,11 @@ ipcMain.handle('watch:add', (event, filePath) => {
   } catch {
     // El archivo puede no existir todavía — ignorar silenciosamente
   }
+}
+
+ipcMain.handle('watch:add', (event, filePath) => {
+  if (fileWatchers.has(filePath)) return;
+  startFileWatcher(filePath);
 });
 
 /**

@@ -8180,12 +8180,17 @@ async function loadFormattedLog(filePath) {
     const levelClass = `log-level-${(e.level || 'info').toLowerCase()}`;
     const hasStack = e.stack && e.stack.trim().length > 0;
 
-    html += `<div class="log-v-entry ${levelClass}" data-level="${escapeAttr(e.level || '')}">
+    // Mostrar botón "Ask Claude" en entries ERROR/WARNING si Claude CLI está disponible
+    const showAskClaude = state.projectCaps?.hasClaude
+      && (e.level === 'ERROR' || e.level === 'WARNING');
+
+    html += `<div class="log-v-entry ${levelClass}" data-level="${escapeAttr(e.level || '')}" data-idx="${i}">
       <div class="log-v-entry-head">
         <span class="log-v-timestamp">${escapeHtml(e.timestamp || '')}</span>
         <span class="log-v-badge ${levelClass}">${escapeHtml(e.level || 'LOG')}</span>
         <span class="log-v-env">${escapeHtml(e.env || '')}</span>
         ${hasStack ? '<button class="log-v-toggle" title="Toggle stack trace">▸</button>' : ''}
+        ${showAskClaude ? '<button class="log-v-ask-claude" title="Ask Claude about this error"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg> Ask Claude</button>' : ''}
         <span class="log-v-message">${formatLogMessage(e.message)}</span>
       </div>`;
 
@@ -8233,6 +8238,50 @@ async function loadFormattedLog(filePath) {
       filterLogEntries(container, entries.length);
       searchInput.blur();
     }
+  });
+
+  // Ask Claude — abre una terminal y envía el error como prompt a Claude CLI
+  container.querySelectorAll('.log-v-ask-claude').forEach((btn) => {
+    btn.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      const entry = btn.closest('.log-v-entry');
+      const idx = parseInt(entry.dataset.idx, 10);
+      const e = entries[idx];
+      if (!e) return;
+
+      // Armar el prompt con el error y stack trace (truncado a ~4000 chars)
+      let errorText = `[${e.level}] ${e.message}`;
+      if (e.stack && e.stack.trim()) {
+        errorText += '\n\nStack trace:\n' + e.stack.trim();
+      }
+      if (errorText.length > 4000) errorText = errorText.slice(0, 4000) + '...';
+
+      // Escapar comillas simples para el shell
+      const escaped = errorText.replace(/'/g, "'\\''");
+      const cmd = `claude -p 'Explain this Laravel error and suggest a fix:\\n\\n${escaped.replace(/\n/g, '\\n')}'\n`;
+
+      // Abrir/crear terminal y enviar el comando
+      const termTab = state.openTabs.find((t) => t.path === '__terminal__');
+      if (!termTab) {
+        const tab = { path: '__terminal__', name: 'Terminal', model: null, language: 'terminal', modified: false };
+        state.openTabs.push(tab);
+        activateTab(tab);
+        if (state.terminals.size === 0) {
+          const localId = await createTerminalInstance();
+          // Esperar a que el pty esté listo antes de escribir
+          setTimeout(() => {
+            const info = state.terminals.get(localId);
+            if (info?.ptyId) window.api.ptyWrite(info.ptyId, cmd);
+          }, 500);
+        }
+      } else {
+        activateTab(termTab);
+        const activeInfo = state.terminals.get(state.activeTerminalId);
+        if (activeInfo?.ptyId) {
+          window.api.ptyWrite(activeInfo.ptyId, cmd);
+        }
+      }
+    });
   });
 
   // Refresh
