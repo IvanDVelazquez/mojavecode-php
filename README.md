@@ -440,6 +440,17 @@ No additional runtime dependencies for database access (uses `mysql`/`psql` CLI)
 
 ## Changelog
 
+### v3.4.0
+
+- **New File / New Folder** — Create files and folders directly from the file tree, VS Code-style. An inline text input appears in the tree at the correct position; press Enter to confirm or Escape to cancel. Available via header buttons (visible on hover) and the right-click context menu
+- **Nested Path Creation** — Type a path like `src/utils/helper.js` in the inline input and intermediate directories are created automatically
+- **Auto-Open New Files** — Newly created files open in the editor immediately after creation
+
+### v3.3.1
+
+- **Ask Claude Interactive Mode** — "Ask Claude" now launches Claude CLI in interactive mode instead of one-shot `claude -p`. Opens a dedicated terminal, starts a Claude session, and sends the error as a prompt inside the interactive interface for a richer debugging experience
+- **Ask Claude Button Visibility** — Enlarged the "Ask Claude" button icon (12px → 16px), text (10px → 11.5px), padding, and border contrast so it's easier to spot on ERROR and WARNING log entries
+
 ### v3.3.0
 
 - **Ask Claude (Error Log)** — ERROR and WARNING entries in the Error Log now show an "Ask Claude" button when the `claude` CLI is detected in PATH. Clicking it opens the integrated terminal and pipes the error + stack trace to `claude -p` for instant analysis and fix suggestions

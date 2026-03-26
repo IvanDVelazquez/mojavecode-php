@@ -54,6 +54,8 @@ contextBridge.exposeInMainWorld('api', {
   // ── File operations (context menu del file tree) ──
   deleteFile: (targetPath) => ipcRenderer.invoke('fs:deleteFile', targetPath),
   copyFile: (srcPath, destPath) => ipcRenderer.invoke('fs:copyFile', srcPath, destPath),
+  createFile: (filePath) => ipcRenderer.invoke('fs:createFile', filePath),
+  createDir: (dirPath) => ipcRenderer.invoke('fs:createDir', dirPath),
 
   // ── Carpetas recientes ──
   // Cuando el renderer abre una carpeta desde la welcome screen,

@@ -731,6 +731,26 @@ async function createTerminalInstance(cwd) {
 
   const ptyId = result.id || null;
 
+  // ── Shift+Enter → nueva línea en la terminal ────────────────
+  // xterm.js no soporta el kitty keyboard protocol, así que
+  // Shift+Enter llega como un Enter normal (\r). Para que apps
+  // como Claude Code CLI lo interpreten como "nueva línea":
+  //   - macOS: enviamos ESC + CR (\x1b\r) que es la secuencia de
+  //     Option+Enter — el método nativo de Claude Code en macOS.
+  //   - Otros OS: enviamos la secuencia CSI u (kitty protocol)
+  //     ESC[13;2u (keycode 13, modifier shift=2).
+  //   - Bash/zsh: ambas abren línea de continuación (PS2).
+  xterm.attachCustomKeyEventHandler((ev) => {
+    if (ev.type === 'keydown' && ev.key === 'Enter' && ev.shiftKey) {
+      if (ptyId) {
+        const seq = process.platform === 'darwin' ? '\x1b\r' : '\x1b[13;2u';
+        window.api.ptyWrite(ptyId, seq);
+      }
+      return false;
+    }
+    return true;
+  });
+
   // xterm → pty
   xterm.onData((data) => {
     if (ptyId) window.api.ptyWrite(ptyId, data);
@@ -1103,6 +1123,14 @@ function initTreeContextMenu() {
     const targetPath = menu.dataset.targetPath;
     menu.style.display = 'none';
 
+    // ── New File / New Folder: inline input en el árbol ──
+    if (action === 'new-file' || action === 'new-folder') {
+      const type = action === 'new-file' ? 'file' : 'folder';
+      const ctx = getTreeInsertionContext(targetPath);
+      showTreeInlineInput(type, ctx.parentDir, ctx.afterItem, ctx.depth);
+      return;
+    }
+
     // ── Copy Path: copiar la ruta absoluta al clipboard del SO ──
     if (action === 'copy-path') {
       navigator.clipboard.writeText(targetPath);
@@ -1183,6 +1211,188 @@ function refreshTreeParent(dirPath) {
   }
   // Fallback: recargar todo el árbol si no encontramos la carpeta
   if (state.currentFolder) loadFileTree(state.currentFolder);
+}
+
+// ┌──────────────────────────────────────────────────┐
+// │  3a-bis. NEW FILE / NEW FOLDER                   │
+// │  Inline input à la VS Code para crear archivos   │
+// │  y carpetas directamente en el file tree.        │
+// │                                                  │
+// │  FLUJO:                                          │
+// │  1. El usuario hace click en los botones del     │
+// │     header (New File / New Folder) o en el menú  │
+// │     contextual sobre un item del árbol.          │
+// │  2. Se inserta un <input> inline en la posición  │
+// │     correcta del árbol con la indentación que    │
+// │     le corresponde.                              │
+// │  3. Al confirmar con Enter (o blur) se crea el   │
+// │     archivo/carpeta en disco y se refresca el    │
+// │     árbol. Escape cancela.                       │
+// │  4. Los archivos nuevos se abren automáticamente │
+// │     en el editor.                                │
+// │                                                  │
+// │  FEATURES:                                       │
+// │  - Paths anidados: escribir "src/utils/foo.js"   │
+// │    crea los directorios intermedios              │
+// │  - Validación de caracteres ilegales             │
+// │  - Detección de duplicados antes de crear        │
+// │  - Inserción contextual: en una carpeta expandi- │
+// │    da el input aparece como primer hijo; en un   │
+// │    archivo aparece como hermano siguiente.       │
+// └──────────────────────────────────────────────────┘
+
+/**
+ * Mostrar un input inline en el file tree para crear un archivo o carpeta.
+ *
+ * Inserta una fila temporal con un <input> de texto en la posición correcta
+ * del árbol. El usuario escribe el nombre y al confirmar con Enter se crea
+ * el recurso en disco vía IPC y se refresca el árbol.
+ *
+ * Si el target es una carpeta expandida, el input aparece como primer hijo.
+ * Si es un archivo, aparece como hermano siguiente (misma carpeta padre).
+ * Desde los botones del header, aparece en la raíz del proyecto.
+ *
+ * @param {'file'|'folder'} type      - Tipo de recurso a crear
+ * @param {string}          parentDir - Directorio destino en disco
+ * @param {HTMLElement|null} afterItem - Nodo del árbol tras el cual insertar, o null para la raíz
+ * @param {number}          depth     - Nivel de indentación (0 = raíz)
+ */
+function showTreeInlineInput(type, parentDir, afterItem, depth) {
+  // Solo puede haber un input inline a la vez
+  document.querySelector('.tree-inline-input-row')?.remove();
+
+  // ── Construir la fila del input ────────────────────────────
+  const row = document.createElement('div');
+  row.className = 'tree-item tree-inline-input-row';
+  row.style.paddingLeft = `${12 + depth * 16}px`;
+
+  const iconSvg = type === 'folder'
+    ? getFolderIcon()
+    : '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
+
+  row.innerHTML = `
+    <span class="tree-chevron" style="visibility:${type === 'folder' ? 'visible' : 'hidden'}">▸</span>
+    <span class="tree-icon${type === 'folder' ? ' folder-icon' : ''}">${iconSvg}</span>`;
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'tree-inline-input';
+  input.spellcheck = false;
+  input.autocomplete = 'off';
+  row.appendChild(input);
+
+  // ── Posicionar en el árbol ─────────────────────────────────
+  if (afterItem) {
+    const chevron = afterItem.querySelector('.tree-chevron');
+    const isExpandedFolder = chevron && chevron.textContent === '▾';
+    const nextSibling = afterItem.nextElementSibling;
+
+    // Carpeta expandida → insertar como primer hijo dentro de .tree-children
+    if (isExpandedFolder && nextSibling?.classList.contains('tree-children')) {
+      nextSibling.prepend(row);
+    } else {
+      afterItem.after(row);
+    }
+  } else {
+    document.getElementById('file-tree').prepend(row);
+  }
+
+  input.focus();
+
+  // ── Confirmar creación ─────────────────────────────────────
+  const confirm = async () => {
+    const name = input.value.trim();
+    row.remove();
+    if (!name) return;
+
+    // Rechazar caracteres ilegales en nombres de archivo (Windows + POSIX)
+    if (/[<>:"|?*\x00-\x1f]/.test(name)) {
+      alert(`Invalid name: "${name}"`);
+      return;
+    }
+
+    const newPath = `${parentDir}/${name}`;
+
+    // Verificar duplicados antes de intentar crear
+    const existing = await window.api.stat(newPath);
+    if (existing) {
+      alert(`"${name}" already exists in this location.`);
+      return;
+    }
+
+    let result;
+    if (type === 'folder') {
+      result = await window.api.createDir(newPath);
+    } else {
+      // Paths anidados (ej: "src/utils/helper.js") → crear dirs intermedios primero
+      const lastSlash = name.lastIndexOf('/');
+      if (lastSlash > 0) {
+        await window.api.createDir(`${parentDir}/${name.substring(0, lastSlash)}`);
+      }
+      result = await window.api.createFile(newPath);
+    }
+
+    if (result.error) {
+      alert(`Error creating ${type}: ${result.error}`);
+    } else {
+      refreshTreeParent(parentDir);
+      // Abrir el archivo nuevo en el editor automáticamente
+      if (type === 'file') {
+        const fileName = name.split('/').pop();
+        setTimeout(() => openFile(newPath, fileName), 100);
+      }
+    }
+  };
+
+  // ── Atajos de teclado ──────────────────────────────────────
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); confirm(); }
+    else if (e.key === 'Escape') { row.remove(); }
+  });
+
+  // Blur también confirma (misma UX que VS Code)
+  input.addEventListener('blur', () => {
+    setTimeout(() => { if (row.parentElement) confirm(); }, 100);
+  });
+}
+
+/**
+ * Determinar el directorio padre y posición de inserción en el árbol
+ * para un item dado.
+ *
+ * Si el target es una carpeta, el nuevo recurso se crea dentro de ella
+ * y el input aparece como primer hijo. Si es un archivo, se crea en
+ * su carpeta padre y el input aparece como hermano siguiente.
+ *
+ * @param {string} targetPath - Ruta absoluta del item seleccionado
+ * @returns {{ parentDir: string, afterItem: HTMLElement|null, depth: number }}
+ */
+function getTreeInsertionContext(targetPath) {
+  const items = document.querySelectorAll('.tree-item');
+  let targetItem = null;
+  for (const item of items) {
+    if (item.dataset.path === targetPath) { targetItem = item; break; }
+  }
+
+  if (!targetItem) return { parentDir: state.currentFolder, afterItem: null, depth: 0 };
+
+  const chevron = targetItem.querySelector('.tree-chevron');
+  const isDir = chevron && chevron.style.visibility !== 'hidden';
+
+  if (isDir) {
+    // Es carpeta: expandirla si está colapsada, insertar dentro
+    const isExpanded = chevron.textContent === '▾';
+    if (!isExpanded) targetItem.click(); // expandir
+    const depthPx = parseInt(targetItem.style.paddingLeft) || 12;
+    const depth = Math.round((depthPx - 12) / 16) + 1;
+    return { parentDir: targetPath, afterItem: targetItem, depth };
+  } else {
+    // Es archivo: usar su carpeta padre
+    const parentDir = targetPath.substring(0, targetPath.lastIndexOf('/'));
+    const depthPx = parseInt(targetItem.style.paddingLeft) || 12;
+    const depth = Math.round((depthPx - 12) / 16);
+    return { parentDir, afterItem: targetItem, depth };
+  }
 }
 
 // ┌──────────────────────────────────────────────────┐
@@ -2920,6 +3130,20 @@ function initSidebarSections() {
       header.classList.toggle('collapsed');
       header.closest('.sidebar-section').classList.toggle('collapsed');
     });
+  });
+
+  // New File button in FILES header
+  document.getElementById('btn-new-file').addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!state.currentFolder) return;
+    showTreeInlineInput('file', state.currentFolder, null, 0);
+  });
+
+  // New Folder button in FILES header
+  document.getElementById('btn-new-folder').addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!state.currentFolder) return;
+    showTreeInlineInput('folder', state.currentFolder, null, 0);
   });
 
   // Collapse all sub-folders in the file tree (keep root-level folders expanded)
@@ -8190,7 +8414,7 @@ async function loadFormattedLog(filePath) {
         <span class="log-v-badge ${levelClass}">${escapeHtml(e.level || 'LOG')}</span>
         <span class="log-v-env">${escapeHtml(e.env || '')}</span>
         ${hasStack ? '<button class="log-v-toggle" title="Toggle stack trace">▸</button>' : ''}
-        ${showAskClaude ? '<button class="log-v-ask-claude" title="Ask Claude about this error"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg> Ask Claude</button>' : ''}
+        ${showAskClaude ? '<button class="log-v-ask-claude" title="Ask Claude about this error"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg> Ask Claude</button>' : ''}
         <span class="log-v-message">${formatLogMessage(e.message)}</span>
       </div>`;
 
@@ -8240,13 +8464,14 @@ async function loadFormattedLog(filePath) {
     }
   });
 
-  // ── Ask Claude — send error to Claude CLI in terminal ───────────
+  // ── Ask Claude — open interactive Claude CLI and send error ──────
   //
   // When the project has the `claude` CLI available in PATH, each
   // ERROR and WARNING log entry renders an "Ask Claude" button.
   // Clicking it builds a prompt with the error message + stack trace
-  // (truncated to ~4000 chars), opens/focuses the integrated terminal,
-  // and pipes the prompt through `claude -p` for instant analysis.
+  // (truncated to ~4000 chars), opens a NEW terminal instance,
+  // launches `claude` in interactive mode, waits for it to start,
+  // and then types the prompt inside the Claude session.
   container.querySelectorAll('.log-v-ask-claude').forEach((btn) => {
     btn.addEventListener('click', async (ev) => {
       ev.stopPropagation();
@@ -8262,11 +8487,10 @@ async function loadFormattedLog(filePath) {
       }
       if (errorText.length > 4000) errorText = errorText.slice(0, 4000) + '...';
 
-      // Escapar comillas simples para el shell
-      const escaped = errorText.replace(/'/g, "'\\''");
-      const cmd = `claude -p 'Explain this Laravel error and suggest a fix:\\n\\n${escaped.replace(/\n/g, '\\n')}'\n`;
+      // Prompt que se enviará dentro de la sesión interactiva de Claude
+      const prompt = `Explain this Laravel error and suggest a fix:\n\n${errorText}`;
 
-      // Abrir/crear terminal y enviar el comando
+      // Abrir/crear terminal y lanzar claude interactivo
       const termTab = state.openTabs.find((t) => t.path === '__terminal__');
       if (!termTab) {
         const tab = { path: '__terminal__', name: 'Terminal', model: null, language: 'terminal', modified: false };
@@ -8274,18 +8498,31 @@ async function loadFormattedLog(filePath) {
         activateTab(tab);
         if (state.terminals.size === 0) {
           const localId = await createTerminalInstance();
-          // Esperar a que el pty esté listo antes de escribir
           setTimeout(() => {
             const info = state.terminals.get(localId);
-            if (info?.ptyId) window.api.ptyWrite(info.ptyId, cmd);
+            if (info?.ptyId) {
+              // Lanzar claude en modo interactivo
+              window.api.ptyWrite(info.ptyId, 'claude\n');
+              // Esperar a que Claude CLI inicie y escribir el prompt
+              setTimeout(() => {
+                window.api.ptyWrite(info.ptyId, prompt + '\n');
+              }, 2000);
+            }
           }, 500);
         }
       } else {
         activateTab(termTab);
-        const activeInfo = state.terminals.get(state.activeTerminalId);
-        if (activeInfo?.ptyId) {
-          window.api.ptyWrite(activeInfo.ptyId, cmd);
-        }
+        // Crear una nueva instancia de terminal para Claude
+        const localId = await createTerminalInstance();
+        setTimeout(() => {
+          const info = state.terminals.get(localId);
+          if (info?.ptyId) {
+            window.api.ptyWrite(info.ptyId, 'claude\n');
+            setTimeout(() => {
+              window.api.ptyWrite(info.ptyId, prompt + '\n');
+            }, 2000);
+          }
+        }, 300);
       }
     });
   });

@@ -568,6 +568,33 @@ body.theme-ready {
   text-overflow: ellipsis;
 }
 
+/* ════════════════════════════════════════════════════════════
+   INLINE INPUT — New File / New Folder input row in file tree
+   Temporary <input> that appears inline when the user creates
+   a new file or folder, matching the look of a regular tree item.
+   ════════════════════════════════════════════════════════════ */
+.tree-inline-input-row {
+  background: var(--bg-hover);
+}
+
+.tree-inline-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-editor);
+  color: var(--text-primary);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  padding: 1px 4px;
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  height: 20px;
+}
+
+.tree-inline-input::placeholder {
+  color: var(--text-muted);
+}
+
 /* ─── OUTLINE ─── */
 #section-outline {
   min-height: 0;
@@ -4604,12 +4631,12 @@ body.theme-ready {
 .log-v-ask-claude {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  background: rgba(210, 153, 34, 0.12);
-  border: 1px solid rgba(210, 153, 34, 0.3);
+  gap: 5px;
+  background: rgba(210, 153, 34, 0.18);
+  border: 1px solid rgba(210, 153, 34, 0.45);
   border-radius: 4px;
-  padding: 2px 8px;
-  font-size: 10px;
+  padding: 3px 10px;
+  font-size: 11.5px;
   font-weight: 600;
   color: #d29922;
   cursor: pointer;

@@ -755,7 +755,7 @@ function createMenu() {
             dialog.showMessageBox(mainWindow, {
               type: 'info',
               title: 'MojaveCode PHP',
-              message: 'MojaveCode PHP v3.3.0',
+              message: 'MojaveCode PHP v3.4.0',
               detail: 'A lightweight code editor by MojaveWare.\nBuilt with Electron + Monaco + xterm.js',
             });
           },
@@ -1330,11 +1330,38 @@ ipcMain.handle('fs:deleteFile', async (event, targetPath) => {
 });
 
 /**
- * Copiar un archivo o carpeta a una nueva ubicación.
+ * Crear un archivo vacío en disco.
  *
- * Para carpetas usa `cp` recursivo (copia todo el árbol).
- * El renderer determina el destPath (agrega " - Copy" si ya existe).
+ * Usa el flag 'wx' (write exclusive) que falla si el archivo
+ * ya existe, evitando sobrescrituras accidentales.
+ * El renderer llama esto desde el inline input del file tree
+ * después de que el usuario escribe el nombre.
  */
+ipcMain.handle('fs:createFile', async (event, filePath) => {
+  try {
+    await fs.promises.writeFile(filePath, '', { flag: 'wx' });
+    return { success: true, error: null };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+/**
+ * Crear un directorio en disco.
+ *
+ * Usa `recursive: true` para crear directorios intermedios
+ * si el usuario escribe un path anidado (ej: "src/utils/helpers").
+ * No falla si el directorio ya existe.
+ */
+ipcMain.handle('fs:createDir', async (event, dirPath) => {
+  try {
+    await fs.promises.mkdir(dirPath, { recursive: true });
+    return { success: true, error: null };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
 ipcMain.handle('fs:copyFile', async (event, srcPath, destPath) => {
   try {
     const stat = await fs.promises.stat(srcPath);

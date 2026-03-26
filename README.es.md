@@ -457,6 +457,17 @@ Sin dependencias adicionales de runtime para acceso a base de datos (usa CLI de 
 
 ## Changelog
 
+### v3.4.0
+
+- **Nuevo Archivo / Nueva Carpeta** — Crea archivos y carpetas directamente desde el árbol de archivos, al estilo VS Code. Un input de texto inline aparece en la posición correcta del árbol; Enter confirma, Escape cancela. Disponible desde los botones del header (visibles al hacer hover) y el menú contextual con click derecho
+- **Creación de Paths Anidados** — Escribe un path como `src/utils/helper.js` en el input inline y los directorios intermedios se crean automáticamente
+- **Auto-Abrir Archivos Nuevos** — Los archivos recién creados se abren en el editor inmediatamente después de crearlos
+
+### v3.3.1
+
+- **Ask Claude en Modo Interactivo** — "Ask Claude" ahora lanza Claude CLI en modo interactivo en vez de one-shot `claude -p`. Abre una terminal dedicada, inicia una sesión de Claude, y envía el error como prompt dentro de la interfaz interactiva para una experiencia de debugging más completa
+- **Visibilidad del Botón Ask Claude** — Se agrandó el ícono del botón "Ask Claude" (12px → 16px), texto (10px → 11.5px), padding y contraste del borde para que sea más fácil de ver en entradas ERROR y WARNING del log
+
 ### v3.3.0
 
 - **Ask Claude (Error Log)** — Las entradas ERROR y WARNING en el Error Log ahora muestran un botón "Ask Claude" cuando se detecta el CLI `claude` en PATH. Al hacer click abre la terminal integrada y envía el error + stack trace a `claude -p` para análisis instantáneo y sugerencias de fix
