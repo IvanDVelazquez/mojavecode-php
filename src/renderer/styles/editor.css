@@ -5221,6 +5221,23 @@ body.theme-ready {
   border-bottom-color: var(--border);
 }
 
+.phpfn-item-sig {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.phpfn-desc {
+  display: block;
+  font-family: var(--font-ui, system-ui);
+  font-size: 10.5px;
+  color: var(--text-muted);
+  margin-top: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .phpfn-item mark {
   background: var(--accent);
   color: #fff;

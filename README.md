@@ -453,6 +453,10 @@ No additional runtime dependencies for database access (uses `mysql`/`psql` CLI)
 
 ## Changelog
 
+### v3.5.1
+
+- **PHP Function Descriptions** — Every function in the PHP Functions Reference panel now shows a one-line description. ~300 common functions have curated descriptions; the rest are inferred from prefix family or extension. Search also matches descriptions (e.g., type "sort" or "hash" to find relevant functions)
+
 ### v3.5.0
 
 - **VS Code Keybindings** — Full set of VS Code keyboard shortcuts: toggle comments (`Cmd+/`, `Cmd+7` for Spanish keyboards), delete/move/copy/duplicate lines, multi-cursor selection, fold/unfold, go to line, and more. Works in both main and split editors

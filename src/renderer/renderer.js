@@ -6241,7 +6241,7 @@ function filterPhpFunctions(query) {
 
   const q = query.toLowerCase().trim();
   const filtered = q
-    ? all.filter(f => f.name.includes(q))
+    ? all.filter(f => f.name.includes(q) || (f.desc && f.desc.toLowerCase().includes(q)))
     : all;
 
   // Limitar el render a 200 para performance (el usuario filtra)
@@ -6261,8 +6261,10 @@ function filterPhpFunctions(query) {
           + escapeHtml(f.name.slice(idx + q.length));
       }
     }
+    const desc = f.desc ? `<span class="phpfn-desc">${escapeHtml(f.desc)}</span>` : '';
     return `<div class="phpfn-item" data-fn="${escapeHtml(f.name)}">
-      <span class="phpfn-name">${nameHtml}</span><span class="phpfn-params">(${params})</span>${retType}
+      <div class="phpfn-item-sig"><span class="phpfn-name">${nameHtml}</span><span class="phpfn-params">(${params})</span>${retType}</div>
+      ${desc}
     </div>`;
   }).join('');
 
@@ -6459,7 +6461,7 @@ async function renderPhpDetail(fn) {
           ${deprecatedBadge}
           ${d.returnType ? `<span class="cd-meta-badge">${escapeHtml(d.returnType)}</span>` : ''}
         </div>
-        <p class="cd-description">Required params: ${d.numRequired} of ${d.numTotal}</p>
+        <p class="cd-description">${fn.desc ? escapeHtml(fn.desc) + ' — ' : ''}Required params: ${d.numRequired} of ${d.numTotal}</p>
       </div>
       <div class="cd-divider"></div>
       <div class="cd-body">

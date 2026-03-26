@@ -470,6 +470,10 @@ Sin dependencias adicionales de runtime para acceso a base de datos (usa CLI de 
 
 ## Changelog
 
+### v3.5.1
+
+- **Descripciones de Funciones PHP** — Cada función en el panel de Referencia PHP ahora muestra una descripción de una línea. ~300 funciones comunes tienen descripciones curadas; el resto se infieren del prefijo o extensión. La búsqueda también filtra por descripción (ej: escribí "sort" o "hash" para encontrar funciones relevantes)
+
 ### v3.5.0
 
 - **Atajos de VS Code** — Set completo de atajos de teclado de VS Code: comentar líneas (`Cmd+/`, `Cmd+7` para teclados en español), eliminar/mover/copiar/duplicar líneas, selección multi-cursor, fold/unfold, ir a línea, y más. Funciona en ambos editores (principal y split)
