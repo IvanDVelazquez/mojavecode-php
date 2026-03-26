@@ -307,6 +307,9 @@ function initEditor() {
     run: () => editorZoomReset(),
   });
 
+  // ── VS Code keybindings (editor principal) ──
+  registerVSCodeKeybindings(state.editor);
+
   // UI Zoom (sidebar, file tree, debug panel) — handled by global keydown listener
   // Registered as editor actions for Command Palette access only (no keybindings to avoid conflicts)
   state.editor.addAction({ id: 'mojavecode.uiZoomIn',    label: 'UI Zoom In (Sidebar/Panels)',    run: () => uiZoomIn() });
@@ -1617,6 +1620,7 @@ const specialTabs = [
   { match: '__claude-detail__',  container: 'claude-detail-container',  display: 'flex',  label: 'Claude',  prefix: true },
   { match: '__history-detail__', container: 'history-detail-container', display: 'flex',  label: 'Prompt',  prefix: true },
   { match: '__env-viewer__',    container: 'env-viewer-container',     display: 'flex',  label: '.env',    prefix: true },
+  { match: '__php-fn__',       container: 'php-detail-container',     display: 'flex',  label: 'PHP Docs', prefix: true },
 ];
 
 function activateTab(tab) {
@@ -2041,6 +2045,183 @@ function renderTabs() {
  * (tema, fuente, tamaño) y escucha eventos para actualizar el status bar
  * y marcar tabs como modificados.
  */
+
+/**
+ * Registra los atajos de teclado estilo VS Code en un editor Monaco.
+ * Se llama tanto para el editor principal como para el editor derecho (split).
+ */
+function registerVSCodeKeybindings(ed) {
+  // Cmd+/ → Toggle line comment (también Cmd+7 para teclados español donde / = Shift+7)
+  ed.addAction({
+    id: 'mojavecode.toggleLineComment',
+    label: 'Toggle Line Comment',
+    keybindings: [
+      monaco.KeyMod.CtrlCmd | monaco.KeyCode.Slash,
+      monaco.KeyMod.CtrlCmd | monaco.KeyCode.Digit7,
+    ],
+    run: (e) => e.getAction('editor.action.commentLine').run(),
+  });
+
+  // Cmd+Shift+/ → Toggle block comment (también Cmd+Shift+A)
+  ed.addAction({
+    id: 'mojavecode.toggleBlockComment',
+    label: 'Toggle Block Comment',
+    keybindings: [
+      monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.Slash,
+      monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyA,
+    ],
+    run: (e) => e.getAction('editor.action.blockComment').run(),
+  });
+
+  // Cmd+Shift+K → Delete line
+  ed.addAction({
+    id: 'mojavecode.deleteLine',
+    label: 'Delete Line',
+    keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyK],
+    run: (e) => e.getAction('editor.action.deleteLines').run(),
+  });
+
+  // Alt+Up / Alt+Down → Move line up/down
+  ed.addAction({
+    id: 'mojavecode.moveLineUp',
+    label: 'Move Line Up',
+    keybindings: [monaco.KeyMod.Alt | monaco.KeyCode.UpArrow],
+    run: (e) => e.getAction('editor.action.moveLinesUpAction').run(),
+  });
+  ed.addAction({
+    id: 'mojavecode.moveLineDown',
+    label: 'Move Line Down',
+    keybindings: [monaco.KeyMod.Alt | monaco.KeyCode.DownArrow],
+    run: (e) => e.getAction('editor.action.moveLinesDownAction').run(),
+  });
+
+  // Alt+Shift+Up / Alt+Shift+Down → Copy line up/down
+  ed.addAction({
+    id: 'mojavecode.copyLineUp',
+    label: 'Copy Line Up',
+    keybindings: [monaco.KeyMod.Alt | monaco.KeyMod.Shift | monaco.KeyCode.UpArrow],
+    run: (e) => e.getAction('editor.action.copyLinesUpAction').run(),
+  });
+  ed.addAction({
+    id: 'mojavecode.copyLineDown',
+    label: 'Copy Line Down',
+    keybindings: [monaco.KeyMod.Alt | monaco.KeyMod.Shift | monaco.KeyCode.DownArrow],
+    run: (e) => e.getAction('editor.action.copyLinesDownAction').run(),
+  });
+
+  // Cmd+D → Add selection to next find match
+  ed.addAction({
+    id: 'mojavecode.addSelectionToNextMatch',
+    label: 'Add Selection to Next Find Match',
+    keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyD],
+    run: (e) => e.getAction('editor.action.addSelectionToNextFindMatch').run(),
+  });
+
+  // Cmd+Shift+L → Select all occurrences of find match
+  ed.addAction({
+    id: 'mojavecode.selectAllOccurrences',
+    label: 'Select All Occurrences',
+    keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyL],
+    run: (e) => e.getAction('editor.action.selectHighlights').run(),
+  });
+
+  // Cmd+L → Select line
+  ed.addAction({
+    id: 'mojavecode.selectLine',
+    label: 'Select Line',
+    keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyL],
+    run: (e) => e.getAction('expandLineSelection').run(),
+  });
+
+  // Cmd+Shift+Enter → Insert line above
+  ed.addAction({
+    id: 'mojavecode.insertLineAbove',
+    label: 'Insert Line Above',
+    keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.Enter],
+    run: (e) => e.getAction('editor.action.insertLineBefore').run(),
+  });
+
+  // Cmd+Enter → Insert line below
+  ed.addAction({
+    id: 'mojavecode.insertLineBelow',
+    label: 'Insert Line Below',
+    keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter],
+    run: (e) => e.getAction('editor.action.insertLineAfter').run(),
+  });
+
+  // Cmd+] / Cmd+[ → Indent / Outdent
+  ed.addAction({
+    id: 'mojavecode.indentLine',
+    label: 'Indent Line',
+    keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.BracketRight],
+    run: (e) => e.getAction('editor.action.indentLines').run(),
+  });
+  ed.addAction({
+    id: 'mojavecode.outdentLine',
+    label: 'Outdent Line',
+    keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.BracketLeft],
+    run: (e) => e.getAction('editor.action.outdentLines').run(),
+  });
+
+  // Cmd+Shift+] / Cmd+Shift+[ → Fold / Unfold
+  ed.addAction({
+    id: 'mojavecode.fold',
+    label: 'Fold',
+    keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.BracketLeft],
+    run: (e) => e.getAction('editor.fold').run(),
+  });
+  ed.addAction({
+    id: 'mojavecode.unfold',
+    label: 'Unfold',
+    keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.BracketRight],
+    run: (e) => e.getAction('editor.unfold').run(),
+  });
+
+  // Cmd+G → Go to line
+  ed.addAction({
+    id: 'mojavecode.goToLine',
+    label: 'Go to Line',
+    keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyG],
+    run: (e) => e.getAction('editor.action.gotoLine').run(),
+  });
+
+  // Cmd+Shift+D → Duplicate selection or line
+  ed.addAction({
+    id: 'mojavecode.duplicateLine',
+    label: 'Duplicate Selection',
+    keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyD],
+    run: (e) => {
+      const sel = e.getSelection();
+      if (sel.isEmpty()) {
+        e.getAction('editor.action.copyLinesDownAction').run();
+      } else {
+        const text = e.getModel().getValueInRange(sel);
+        e.executeEdits('duplicate', [{
+          range: { startLineNumber: sel.endLineNumber, startColumn: sel.endColumn,
+                   endLineNumber: sel.endLineNumber, endColumn: sel.endColumn },
+          text: text,
+        }]);
+      }
+    },
+  });
+
+  // Cmd+Shift+Space → Trigger parameter hints
+  ed.addAction({
+    id: 'mojavecode.triggerParameterHints',
+    label: 'Trigger Parameter Hints',
+    keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.Space],
+    run: (e) => e.getAction('editor.action.triggerParameterHints').run(),
+  });
+
+  // Ctrl+Space → Trigger suggest (autocomplete)
+  ed.addAction({
+    id: 'mojavecode.triggerSuggest',
+    label: 'Trigger Suggest',
+    keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Space],
+    run: (e) => e.getAction('editor.action.triggerSuggest').run(),
+  });
+}
+
 function ensureRightEditor() {
   if (state.editorRight) return;
 
@@ -2102,6 +2283,9 @@ function ensureRightEditor() {
     monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyW,
     () => { if (state.activeTabRight) closeTabRight(state.activeTabRight.path); }
   );
+
+  // Registrar VS Code shortcuts en el editor derecho
+  registerVSCodeKeybindings(state.editorRight);
 }
 
 /**
@@ -3463,6 +3647,7 @@ function hideAllSidebarPanels() {
   document.getElementById('log-panel').style.display = 'none';
   document.getElementById('claude-panel').style.display = 'none';
   document.getElementById('debug-panel').style.display = 'none';
+  document.getElementById('php-functions-panel').style.display = 'none';
   if (state.gitRefreshTimer) {
     clearInterval(state.gitRefreshTimer);
     state.gitRefreshTimer = null;
@@ -5621,14 +5806,25 @@ function rotateHue(hex, degrees) {
 }
 
 /**
- * Generar un tema completo a partir de 3 colores.
- * Devuelve un objeto con id, name, colors (los 3 inputs),
- * vars (CSS variables), isDark, y colores derivados para
- * syntax highlighting.
+ * Genera un tema completo a partir de 4 colores base.
+ *
+ * Deriva todas las variantes necesarias para la UI (fondos, bordes,
+ * textos secundarios), los colores de sintaxis (rotando el hue de
+ * syntaxColor), y los acentos UI (rotando el hue de accentColor).
+ *
+ * @param {string} name       - Nombre del tema (se convierte a slug para el id)
+ * @param {string} bgColor    - Color de fondo base (hex). Determina dark/light.
+ * @param {string} accentColor - Color de acento UI: cursor, bordes activos, badges, gutter
+ * @param {string} textColor  - Color de texto primario (hex)
+ * @param {string} [syntaxColor] - Color base para syntax highlighting (hex).
+ *                                  Si no se provee, usa accentColor (backward compat).
+ * @returns {{ id, name, isDark, colors, vars, syntax }}
  */
-function generateThemeFromColors(name, bgColor, accentColor, textColor) {
+function generateThemeFromColors(name, bgColor, accentColor, textColor, syntaxColor) {
   const isDark = luminance(bgColor) < 0.5;
   const id = 'custom-' + name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+$/, '');
+  // Si no se provee syntaxColor, usar accentColor (backward compat)
+  const syntaxBase = syntaxColor || accentColor;
 
   // ── Derivar variantes del fondo ──
   const bgDarkest = adjustLightness(bgColor, isDark ? -4 : 4);
@@ -5647,15 +5843,15 @@ function generateThemeFromColors(name, bgColor, accentColor, textColor) {
   const textSecondary = mixColors(textColor, bgColor, 0.25);
   const textMuted = mixColors(textColor, bgColor, 0.55);
 
-  // ── Derivar colores de sintaxis desde el acento ──
-  // Rotamos el hue del acento para generar colores complementarios
-  const syntaxKeyword = accentColor;
-  const syntaxFunction = rotateHue(accentColor, 160);
-  const syntaxString = rotateHue(accentColor, 100);
-  const syntaxNumber = rotateHue(accentColor, 40);
-  const syntaxVariable = rotateHue(accentColor, 220);
+  // ── Derivar colores de sintaxis desde syntaxBase ──
+  // Rotamos el hue de syntaxBase para generar colores complementarios
+  const syntaxKeyword = syntaxBase;
+  const syntaxFunction = rotateHue(syntaxBase, 160);
+  const syntaxString = rotateHue(syntaxBase, 100);
+  const syntaxNumber = rotateHue(syntaxBase, 40);
+  const syntaxVariable = rotateHue(syntaxBase, 220);
   const syntaxComment = textMuted;
-  const syntaxTag = rotateHue(accentColor, 130);
+  const syntaxTag = rotateHue(syntaxBase, 130);
 
   // ── Colores UI derivados del acento ──
   const accentHover = adjustLightness(accentColor, 10);
@@ -5667,7 +5863,7 @@ function generateThemeFromColors(name, bgColor, accentColor, textColor) {
 
   return {
     id, name, isDark,
-    colors: { bg: bgColor, accent: accentColor, text: textColor },
+    colors: { bg: bgColor, accent: accentColor, text: textColor, syntax: syntaxBase },
     vars: {
       '--bg-darkest': bgDarkest, '--bg-dark': bgDark, '--bg-panel': bgPanel,
       '--bg-sidebar': bgSidebar, '--bg-hover': bgHover, '--bg-active': bgActive,
@@ -5682,7 +5878,7 @@ function generateThemeFromColors(name, bgColor, accentColor, textColor) {
     syntax: {
       keyword: syntaxKeyword, function: syntaxFunction, string: syntaxString,
       number: syntaxNumber, variable: syntaxVariable, comment: syntaxComment,
-      tag: syntaxTag, type: accentHover, constant: syntaxNumber,
+      tag: syntaxTag, type: adjustLightness(syntaxBase, 10), constant: syntaxNumber,
     },
   };
 }
@@ -5702,7 +5898,7 @@ function registerCustomMonacoTheme(monacoId, theme) {
 
   monaco.editor.defineTheme(monacoId, {
     base: theme.isDark ? 'vs-dark' : 'vs',
-    inherit: true,
+    inherit: false,
     rules: [
       // ── Base token (catch-all para tokens no definidos) ──
       { token: '', foreground: strip(theme.vars['--text-primary']) },
@@ -5712,8 +5908,12 @@ function registerCustomMonacoTheme(monacoId, theme) {
       { token: 'keyword.control', foreground: strip(syn.keyword), fontStyle: 'bold' },
       { token: 'string', foreground: strip(syn.string) },
       { token: 'string.escape', foreground: strip(syn.number) },
+      { token: 'string.key', foreground: strip(syn.string) },
+      { token: 'string.value', foreground: strip(syn.string) },
       { token: 'number', foreground: strip(syn.number) },
       { token: 'number.float', foreground: strip(syn.number) },
+      { token: 'number.hex', foreground: strip(syn.number) },
+      { token: 'number.octal', foreground: strip(syn.number) },
       { token: 'type', foreground: strip(syn.type) },
       { token: 'type.identifier', foreground: strip(syn.type) },
       { token: 'function', foreground: strip(syn.function) },
@@ -5722,20 +5922,37 @@ function registerCustomMonacoTheme(monacoId, theme) {
       { token: 'constant', foreground: strip(syn.constant), fontStyle: 'bold' },
       // ── HTML / Blade ──
       { token: 'tag', foreground: strip(syn.tag) },
+      { token: 'tag.html', foreground: strip(syn.tag) },
       { token: 'tag.id.pug', foreground: strip(syn.tag) },
       { token: 'tag.class.pug', foreground: strip(syn.tag) },
       { token: 'attribute.name', foreground: strip(theme.vars['--accent-blue']) },
+      { token: 'attribute.name.html', foreground: strip(theme.vars['--accent-blue']) },
       { token: 'attribute.value', foreground: strip(syn.string) },
+      { token: 'attribute.value.html', foreground: strip(syn.string) },
       { token: 'metatag', foreground: strip(syn.keyword) },
       { token: 'metatag.content', foreground: strip(syn.string) },
       // ── Delimiters & operators ──
       { token: 'delimiter', foreground: strip(theme.vars['--text-secondary']) },
       { token: 'delimiter.bracket', foreground: strip(theme.vars['--text-secondary']) },
+      { token: 'delimiter.html', foreground: strip(theme.vars['--text-muted']) },
+      { token: 'delimiter.parenthesis', foreground: strip(theme.vars['--text-secondary']) },
+      { token: 'delimiter.curly', foreground: strip(theme.vars['--text-secondary']) },
+      { token: 'delimiter.square', foreground: strip(theme.vars['--text-secondary']) },
+      { token: 'delimiter.angle', foreground: strip(theme.vars['--text-secondary']) },
       { token: 'operator', foreground: strip(theme.vars['--text-primary']) },
       // ── PHP specific ──
       { token: 'metatag.php', foreground: strip(syn.keyword) },
       { token: 'identifier', foreground: strip(theme.vars['--text-primary']) },
       { token: 'namespace', foreground: strip(syn.type) },
+      // ── Annotations / decorators ──
+      { token: 'annotation', foreground: strip(syn.type) },
+      { token: 'annotation.ts', foreground: strip(syn.type) },
+      // ── Regexp ──
+      { token: 'regexp', foreground: strip(syn.string) },
+      { token: 'regexp.escape', foreground: strip(syn.number) },
+      // ── Key / property ──
+      { token: 'key', foreground: strip(syn.variable) },
+      { token: 'property', foreground: strip(syn.variable) },
     ],
     colors: {
       // ── Editor surface ──
@@ -5832,6 +6049,9 @@ function showThemeGenerator() {
   const overlay = document.getElementById('theme-gen-overlay');
   overlay.style.display = 'flex';
   document.getElementById('theme-gen-name').value = '';
+  // Sincronizar syntax con accent por defecto
+  const accentVal = document.getElementById('theme-gen-accent').value;
+  document.getElementById('theme-gen-syntax').value = accentVal;
   document.getElementById('theme-gen-name').focus();
   updateThemePreview();
 }
@@ -5850,6 +6070,7 @@ function updateThemePreview() {
   const bg = document.getElementById('theme-gen-bg').value;
   const accent = document.getElementById('theme-gen-accent').value;
   const text = document.getElementById('theme-gen-text').value;
+  const syntax = document.getElementById('theme-gen-syntax').value;
 
   // Actualizar los labels hex
   document.querySelectorAll('.theme-gen-hex').forEach(span => {
@@ -5863,18 +6084,22 @@ function updateThemePreview() {
   const panel = adjustLightness(bg, isDark ? 5 : -2);
   const bar = adjustLightness(bg, isDark ? -4 : 4);
   const muted = mixColors(text, bg, 0.55);
-  const fnColor = rotateHue(accent, 160);
-  const strColor = rotateHue(accent, 100);
+  const fnColor = rotateHue(syntax, 160);
+  const strColor = rotateHue(syntax, 100);
+  const varColor = rotateHue(syntax, 220);
 
   preview.querySelector('.theme-preview-bar').style.background = bar;
   preview.querySelector('.theme-preview-body').style.background = panel;
   preview.querySelector('.theme-preview-sidebar').style.background = sidebar;
   preview.querySelector('.theme-preview-sidebar').style.borderRight = `1px solid ${adjustLightness(bg, isDark ? 15 : -12)}`;
   preview.querySelector('.theme-preview-editor').style.color = text;
-  preview.querySelector('.theme-preview-statusbar').style.background = bar;
-  preview.querySelectorAll('.tp-keyword').forEach(el => el.style.color = accent);
+  // Statusbar y cursor usan accent para que se vea su efecto
+  preview.querySelector('.theme-preview-statusbar').style.background = accent;
+  preview.querySelector('.theme-preview-editor').style.borderLeft = `2px solid ${accent}`;
+  preview.querySelectorAll('.tp-keyword').forEach(el => el.style.color = syntax);
   preview.querySelectorAll('.tp-function').forEach(el => el.style.color = fnColor);
   preview.querySelectorAll('.tp-string').forEach(el => el.style.color = strColor);
+  preview.querySelectorAll('.tp-variable').forEach(el => el.style.color = varColor);
 }
 
 /** Inicializar los event listeners del diálogo del theme generator */
@@ -5883,7 +6108,7 @@ function updateThemePreview() {
   if (!overlay) return;
 
   // Live preview cuando cambian los color pickers
-  ['theme-gen-bg', 'theme-gen-accent', 'theme-gen-text'].forEach(id => {
+  ['theme-gen-bg', 'theme-gen-accent', 'theme-gen-text', 'theme-gen-syntax'].forEach(id => {
     document.getElementById(id).addEventListener('input', updateThemePreview);
   });
 
@@ -5909,8 +6134,9 @@ function updateThemePreview() {
     const bg = document.getElementById('theme-gen-bg').value;
     const accent = document.getElementById('theme-gen-accent').value;
     const text = document.getElementById('theme-gen-text').value;
+    const syntax = document.getElementById('theme-gen-syntax').value;
 
-    const theme = generateThemeFromColors(name, bg, accent, text);
+    const theme = generateThemeFromColors(name, bg, accent, text, syntax);
 
     // Guardar en la lista de temas custom
     const themes = getCustomThemes();
@@ -5931,6 +6157,337 @@ function updateThemePreview() {
 })();
 
 // ┌──────────────────────────────────────────────────┐
+// │  8c-bis. PHP FUNCTIONS REFERENCE                 │
+// │  Panel lateral que lista todas las funciones     │
+// │  internas de PHP con su firma (parámetros y      │
+// │  return type). Usa ReflectionFunction via IPC.   │
+// │  Incluye búsqueda en tiempo real con Cmd+F.      │
+// └──────────────────────────────────────────────────┘
+
+/**
+ * Cache de funciones PHP para no llamar al IPC cada vez
+ * que se abre el panel.
+ */
+const phpFunctionsCache = {
+  functions: null,
+  loading: false,
+};
+
+/**
+ * Muestra el panel lateral de PHP Functions Reference.
+ */
+async function showPhpFunctionsPanel() {
+  state.sidebarView = 'php-functions';
+  hideAllSidebarPanels();
+  document.getElementById('php-functions-panel').style.display = 'flex';
+  document.getElementById('sidebar-header').querySelector('span').textContent = 'PHP FUNCTIONS';
+  setActiveActionButton('btn-php-functions');
+  await renderPhpFunctionsPanel();
+}
+
+/**
+ * Toggle: si ya está activo, vuelve al explorer; si no, lo muestra.
+ */
+function togglePhpFunctionsPanel() {
+  if (state.sidebarView === 'php-functions') {
+    showExplorerPanel();
+  } else {
+    showPhpFunctionsPanel();
+  }
+}
+
+/**
+ * Carga las funciones PHP (desde cache o IPC) y renderiza la lista.
+ * Muestra un indicador de carga mientras espera.
+ */
+async function renderPhpFunctionsPanel() {
+  const listEl = document.getElementById('phpfn-list');
+  const statusEl = document.getElementById('phpfn-status');
+  const searchEl = document.getElementById('phpfn-search');
+
+  // Si ya tenemos cache, renderizar directamente
+  if (phpFunctionsCache.functions) {
+    filterPhpFunctions(searchEl.value);
+    return;
+  }
+
+  // Indicador de carga
+  listEl.innerHTML = '<div class="phpfn-loading">Loading PHP functions…</div>';
+  statusEl.textContent = '';
+
+  if (phpFunctionsCache.loading) return;
+  phpFunctionsCache.loading = true;
+
+  const result = await window.api.phpFunctions();
+  phpFunctionsCache.loading = false;
+
+  if (result.error || !result.functions?.length) {
+    listEl.innerHTML = `<div class="phpfn-empty">${result.error ? escapeHtml(result.error) : 'No functions found. Is PHP installed?'}</div>`;
+    return;
+  }
+
+  phpFunctionsCache.functions = result.functions;
+  filterPhpFunctions(searchEl.value);
+}
+
+/**
+ * Filtra y renderiza la lista de funciones PHP según el query.
+ * @param {string} query - Texto de búsqueda
+ */
+function filterPhpFunctions(query) {
+  const listEl = document.getElementById('phpfn-list');
+  const statusEl = document.getElementById('phpfn-status');
+  const all = phpFunctionsCache.functions || [];
+
+  const q = query.toLowerCase().trim();
+  const filtered = q
+    ? all.filter(f => f.name.includes(q))
+    : all;
+
+  // Limitar el render a 200 para performance (el usuario filtra)
+  const toShow = filtered.slice(0, 200);
+  const hasMore = filtered.length > 200;
+
+  listEl.innerHTML = toShow.map(f => {
+    const retType = f.returnType ? `<span class="phpfn-ret">: ${escapeHtml(f.returnType)}</span>` : '';
+    const params = f.params ? escapeHtml(f.params) : '';
+    // Resaltar el match si hay query
+    let nameHtml = escapeHtml(f.name);
+    if (q) {
+      const idx = f.name.indexOf(q);
+      if (idx !== -1) {
+        nameHtml = escapeHtml(f.name.slice(0, idx))
+          + `<mark>${escapeHtml(f.name.slice(idx, idx + q.length))}</mark>`
+          + escapeHtml(f.name.slice(idx + q.length));
+      }
+    }
+    return `<div class="phpfn-item" data-fn="${escapeHtml(f.name)}">
+      <span class="phpfn-name">${nameHtml}</span><span class="phpfn-params">(${params})</span>${retType}
+    </div>`;
+  }).join('');
+
+  const total = filtered.length;
+  statusEl.textContent = q
+    ? `${total} match${total !== 1 ? 'es' : ''}${hasMore ? ' (showing first 200)' : ''}`
+    : `${all.length} functions${hasMore ? ' (showing first 200 — type to filter)' : ''}`;
+
+  // Click en una función → abrir tab de documentación
+  listEl.querySelectorAll('.phpfn-item').forEach(el => {
+    el.addEventListener('click', () => {
+      const fn = el.dataset.fn;
+      const match = all.find(f => f.name === fn);
+      if (match) openPhpDetail(match);
+    });
+  });
+}
+
+/**
+ * Inicializa el panel de PHP Functions:
+ * - Click en el botón del sidebar
+ * - Búsqueda en tiempo real
+ * - Cmd+F focaliza el search cuando el panel está abierto
+ */
+function initPhpFunctionsPanel() {
+  const btn = document.getElementById('btn-php-functions');
+  if (btn) btn.addEventListener('click', () => togglePhpFunctionsPanel());
+
+  const searchEl = document.getElementById('phpfn-search');
+  if (searchEl) {
+    searchEl.addEventListener('input', () => {
+      filterPhpFunctions(searchEl.value);
+    });
+    // Escape → limpiar búsqueda
+    searchEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        searchEl.value = '';
+        filterPhpFunctions('');
+        searchEl.blur();
+      }
+    });
+  }
+
+  // Cmd+F cuando el panel está abierto → focalizar el search
+  document.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'f' && state.sidebarView === 'php-functions') {
+      e.preventDefault();
+      searchEl.focus();
+      searchEl.select();
+    }
+  });
+}
+
+/**
+ * Abre (o reactiva) un tab de documentación para una función PHP.
+ * Sigue el mismo patrón que openClaudeDetail.
+ *
+ * @param {{ name: string, params: string, returnType: string }} fn
+ */
+function openPhpDetail(fn) {
+  const tabPath = `__php-fn__:${fn.name}`;
+  const existing = state.openTabs.find(t => t.path === tabPath);
+  if (existing) {
+    activateTab(existing);
+  } else {
+    const tab = { path: tabPath, name: fn.name + '()', model: null, language: 'php-doc', modified: false };
+    state.openTabs.push(tab);
+    activateTab(tab);
+  }
+  renderPhpDetail(fn);
+}
+
+/**
+ * Renderiza la documentación de una función PHP en el container.
+ * Muestra un resumen rápido con los datos del cache y luego
+ * carga el detalle completo (parámetros, extensión, etc.) via IPC.
+ *
+ * @param {{ name: string, params: string, returnType: string }} fn
+ */
+async function renderPhpDetail(fn) {
+  const container = document.getElementById('php-detail-container');
+
+  // ── Render inicial rápido (con datos del cache) ──
+  const retBadge = fn.returnType
+    ? `<span class="cd-meta-badge">${escapeHtml(fn.returnType)}</span>` : '';
+  const typeBadge = '<span class="cd-type-badge cd-type-skill">function</span>';
+
+  container.innerHTML = `
+    <div class="cd-root">
+      <div class="cd-header">
+        <div class="cd-title-row">
+          <h1 class="cd-title">${escapeHtml(fn.name)}</h1>
+          ${typeBadge}
+          ${retBadge}
+        </div>
+        <p class="cd-description phpfn-sig-preview"><code>${escapeHtml(fn.name)}(${escapeHtml(fn.params)})</code></p>
+      </div>
+      <div class="cd-divider"></div>
+      <div class="cd-body"><div class="phpfn-loading">Loading documentation…</div></div>
+    </div>
+  `;
+
+  // ── Cargar detalle completo via IPC ──
+  const result = await window.api.phpFunctionDetail(fn.name);
+
+  if (result.error || !result.detail) {
+    container.querySelector('.cd-body').innerHTML =
+      `<p class="cd-p" style="color:var(--accent-red)">${escapeHtml(result.error || 'Could not load function details')}</p>`;
+    return;
+  }
+
+  const d = result.detail;
+
+  // ── Extension badge ──
+  const extBadge = d.extension
+    ? `<span class="cd-meta-badge">${escapeHtml(d.extension)}</span>` : '';
+  const deprecatedBadge = d.deprecated
+    ? '<span class="cd-type-badge" style="background:rgba(234,110,64,0.2);color:var(--accent-red)">deprecated</span>' : '';
+
+  // ── Signature completa ──
+  const sigParams = d.params.map(p => {
+    let s = '';
+    if (p.type) s += p.type + ' ';
+    if (p.byRef) s += '&';
+    if (p.variadic) s += '...';
+    s += '$' + p.name;
+    if (p.default !== null && p.default !== undefined) s += ' = ' + p.default;
+    else if (p.optional && !p.variadic) s += ' = …';
+    return s;
+  }).join(', ');
+  const retType = d.returnType ? ': ' + d.returnType : '';
+  const fullSig = `${d.name}(${sigParams})${retType}`;
+
+  // ── Tabla de parámetros ──
+  let paramsHtml = '';
+  if (d.params.length) {
+    paramsHtml = `
+      <h2 class="cd-h2">Parameters</h2>
+      <div class="phpfn-params-table">
+        ${d.params.map((p, i) => {
+          const required = i < d.numRequired;
+          const reqBadge = required
+            ? '<span class="phpfn-req">required</span>'
+            : '<span class="phpfn-opt">optional</span>';
+          const typeTxt = p.type ? escapeHtml(p.type) : '<span style="color:var(--text-muted)">mixed</span>';
+          let extra = '';
+          if (p.variadic) extra += '<span class="phpfn-flag">variadic</span>';
+          if (p.byRef) extra += '<span class="phpfn-flag">by reference</span>';
+          const defVal = (p.default !== null && p.default !== undefined)
+            ? `<span class="phpfn-default">= ${escapeHtml(String(p.default))}</span>` : '';
+          return `<div class="phpfn-param-row">
+            <span class="phpfn-param-name">$${escapeHtml(p.name)}</span>
+            <span class="phpfn-param-type">${typeTxt}</span>
+            ${reqBadge} ${extra} ${defVal}
+          </div>`;
+        }).join('')}
+      </div>
+    `;
+  } else {
+    paramsHtml = `
+      <h2 class="cd-h2">Parameters</h2>
+      <p class="cd-p" style="color:var(--text-muted)">This function takes no parameters.</p>
+    `;
+  }
+
+  // ── Return type ──
+  const returnHtml = d.returnType
+    ? `<h2 class="cd-h2">Return Value</h2>
+       <p class="cd-p"><code class="cd-inline-code">${escapeHtml(d.returnType)}</code>${d.returnsRef ? ' <span class="phpfn-flag">returns reference</span>' : ''}</p>`
+    : '';
+
+  // ── Ejemplos de uso ──
+  let examplesHtml = '';
+  if (d.examples && d.examples.length) {
+    examplesHtml = `<h2 class="cd-h2">Examples</h2>` + d.examples.map(ex => {
+      // Decodificar \\n a saltos de línea reales para el bloque de código
+      const code = ex.code.replace(/\\n/g, '\n');
+      return `<h3 class="cd-h3">${escapeHtml(ex.title)}</h3>
+        <div class="cd-code">${escapeHtml(code)}</div>`;
+    }).join('');
+  }
+
+  // ── Info extra ──
+  const phpNetUrl = `https://www.php.net/manual/en/function.${d.name.replace(/_/g, '-')}.php`;
+
+  // ── Re-render completo ──
+  container.innerHTML = `
+    <div class="cd-root">
+      <div class="cd-header">
+        <div class="cd-title-row">
+          <h1 class="cd-title">${escapeHtml(d.name)}</h1>
+          ${typeBadge}
+          ${extBadge}
+          ${deprecatedBadge}
+          ${d.returnType ? `<span class="cd-meta-badge">${escapeHtml(d.returnType)}</span>` : ''}
+        </div>
+        <p class="cd-description">Required params: ${d.numRequired} of ${d.numTotal}</p>
+      </div>
+      <div class="cd-divider"></div>
+      <div class="cd-body">
+        <h2 class="cd-h2">Signature</h2>
+        <div class="cd-code">${escapeHtml(fullSig)}</div>
+        ${paramsHtml}
+        ${returnHtml}
+        <div class="cd-divider"></div>
+        ${examplesHtml}
+        <div class="cd-divider"></div>
+        <h2 class="cd-h2">Documentation</h2>
+        <p class="cd-p">
+          <a class="phpfn-link" href="#" data-url="${escapeHtml(phpNetUrl)}">
+            View on php.net → ${escapeHtml(d.name)}
+          </a>
+        </p>
+      </div>
+    </div>
+  `;
+
+  // Link a php.net
+  container.querySelector('.phpfn-link')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    window.open(e.currentTarget.dataset.url, '_blank');
+  });
+}
+
+// ┌──────────────────────────────────────────────────┐
 // │  8c. ERROR LOG                                   │
 // │  Captura console.error, errores no manejados,    │
 // │  y promesas rechazadas. Los muestra en un tab    │
@@ -5938,7 +6495,43 @@ function updateThemePreview() {
 // └──────────────────────────────────────────────────┘
 const errorLog = {
   entries: [],
+  _noticeTimer: null,
 };
+
+/**
+ * Muestra un banner bordo en la parte inferior del editor (sobre el status bar)
+ * cada vez que se registra un error. Si ya hay uno visible, lo reemplaza.
+ * Se auto-oculta después de 6 segundos o al hacer click en "Dismiss".
+ */
+function showErrorNotice(msg) {
+  const banner = document.getElementById('error-notice');
+  if (!banner) return;
+
+  // Truncar mensaje para el banner (primera línea, max 120 chars)
+  const firstLine = msg.split('\n')[0];
+  const short = firstLine.length > 120 ? firstLine.slice(0, 120) + '…' : firstLine;
+
+  document.getElementById('error-notice-text').innerHTML =
+    `<strong>Error:</strong> ${short.replace(/</g, '&lt;').replace(/>/g, '&gt;')}`;
+
+  banner.style.display = 'flex';
+  // Re-trigger animation
+  banner.style.animation = 'none';
+  banner.offsetHeight; // force reflow
+  banner.style.animation = '';
+
+  // Auto-dismiss después de 6s
+  clearTimeout(errorLog._noticeTimer);
+  errorLog._noticeTimer = setTimeout(() => {
+    banner.style.display = 'none';
+  }, 6000);
+
+  // Dismiss manual
+  document.getElementById('error-notice-ok').onclick = () => {
+    clearTimeout(errorLog._noticeTimer);
+    banner.style.display = 'none';
+  };
+}
 
 function initErrorLog() {
   const badge = document.getElementById('status-errors');
@@ -5952,17 +6545,17 @@ function initErrorLog() {
     ).join(' ');
     errorLog.entries.push({ time: new Date(), message: msg });
     updateErrorBadge();
+    showErrorNotice(msg);
     // Si el tab está abierto, refrescar
     if (state.activeTab?.path === '__errorlog__') renderErrorLog();
   };
 
   // Capturar errores no manejados
   window.addEventListener('error', (e) => {
-    errorLog.entries.push({
-      time: new Date(),
-      message: `${e.message}\n  at ${e.filename}:${e.lineno}:${e.colno}`,
-    });
+    const msg = `${e.message}\n  at ${e.filename}:${e.lineno}:${e.colno}`;
+    errorLog.entries.push({ time: new Date(), message: msg });
     updateErrorBadge();
+    showErrorNotice(msg);
     if (state.activeTab?.path === '__errorlog__') renderErrorLog();
   });
 
@@ -5970,8 +6563,10 @@ function initErrorLog() {
     const msg = e.reason instanceof Error
       ? e.reason.stack || e.reason.message
       : String(e.reason);
-    errorLog.entries.push({ time: new Date(), message: `Unhandled Promise: ${msg}` });
+    const fullMsg = `Unhandled Promise: ${msg}`;
+    errorLog.entries.push({ time: new Date(), message: fullMsg });
     updateErrorBadge();
+    showErrorNotice(fullMsg);
     if (state.activeTab?.path === '__errorlog__') renderErrorLog();
   });
 
@@ -6695,6 +7290,128 @@ function buildCommandRegistry() {
       category: 'Go',
       shortcut: '⌘T',
       action: () => toggleSymbolSearch(),
+    },
+
+    // ── Edit (VS Code keybindings) ─────────────────────────────
+    {
+      id: 'edit.toggleLineComment',
+      label: 'Toggle Line Comment',
+      category: 'Edit',
+      shortcut: '⌘/',
+      action: () => { if (state.editor) state.editor.getAction('editor.action.commentLine').run(); },
+    },
+    {
+      id: 'edit.toggleBlockComment',
+      label: 'Toggle Block Comment',
+      category: 'Edit',
+      shortcut: '⌘⇧/',
+      action: () => { if (state.editor) state.editor.getAction('editor.action.blockComment').run(); },
+    },
+    {
+      id: 'edit.deleteLine',
+      label: 'Delete Line',
+      category: 'Edit',
+      shortcut: '⌘⇧K',
+      action: () => { if (state.editor) state.editor.getAction('editor.action.deleteLines').run(); },
+    },
+    {
+      id: 'edit.moveLineUp',
+      label: 'Move Line Up',
+      category: 'Edit',
+      shortcut: '⌥↑',
+      action: () => { if (state.editor) state.editor.getAction('editor.action.moveLinesUpAction').run(); },
+    },
+    {
+      id: 'edit.moveLineDown',
+      label: 'Move Line Down',
+      category: 'Edit',
+      shortcut: '⌥↓',
+      action: () => { if (state.editor) state.editor.getAction('editor.action.moveLinesDownAction').run(); },
+    },
+    {
+      id: 'edit.copyLineUp',
+      label: 'Copy Line Up',
+      category: 'Edit',
+      shortcut: '⌥⇧↑',
+      action: () => { if (state.editor) state.editor.getAction('editor.action.copyLinesUpAction').run(); },
+    },
+    {
+      id: 'edit.copyLineDown',
+      label: 'Copy Line Down',
+      category: 'Edit',
+      shortcut: '⌥⇧↓',
+      action: () => { if (state.editor) state.editor.getAction('editor.action.copyLinesDownAction').run(); },
+    },
+    {
+      id: 'edit.duplicateLine',
+      label: 'Duplicate Selection',
+      category: 'Edit',
+      shortcut: '⌘⇧D',
+      action: () => { if (state.editor) state.editor.getAction('mojavecode.duplicateLine')?.run(); },
+    },
+    {
+      id: 'edit.addSelectionToNextMatch',
+      label: 'Add Selection to Next Find Match',
+      category: 'Edit',
+      shortcut: '⌘D',
+      action: () => { if (state.editor) state.editor.getAction('editor.action.addSelectionToNextFindMatch').run(); },
+    },
+    {
+      id: 'edit.selectAllOccurrences',
+      label: 'Select All Occurrences',
+      category: 'Edit',
+      shortcut: '⌘⇧L',
+      action: () => { if (state.editor) state.editor.getAction('editor.action.selectHighlights').run(); },
+    },
+    {
+      id: 'edit.selectLine',
+      label: 'Select Line',
+      category: 'Edit',
+      shortcut: '⌘L',
+      action: () => { if (state.editor) state.editor.getAction('expandLineSelection').run(); },
+    },
+    {
+      id: 'edit.indentLine',
+      label: 'Indent Line',
+      category: 'Edit',
+      shortcut: '⌘]',
+      action: () => { if (state.editor) state.editor.getAction('editor.action.indentLines').run(); },
+    },
+    {
+      id: 'edit.outdentLine',
+      label: 'Outdent Line',
+      category: 'Edit',
+      shortcut: '⌘[',
+      action: () => { if (state.editor) state.editor.getAction('editor.action.outdentLines').run(); },
+    },
+    {
+      id: 'edit.fold',
+      label: 'Fold',
+      category: 'Edit',
+      shortcut: '⌘⇧[',
+      action: () => { if (state.editor) state.editor.getAction('editor.fold').run(); },
+    },
+    {
+      id: 'edit.unfold',
+      label: 'Unfold',
+      category: 'Edit',
+      shortcut: '⌘⇧]',
+      action: () => { if (state.editor) state.editor.getAction('editor.unfold').run(); },
+    },
+    {
+      id: 'go.goToLine',
+      label: 'Go to Line...',
+      category: 'Go',
+      shortcut: '⌘G',
+      action: () => { if (state.editor) state.editor.getAction('editor.action.gotoLine').run(); },
+    },
+
+    // ── PHP ─────────────────────────────────────────────────────
+    {
+      id: 'php.functionsReference',
+      label: 'PHP Functions Reference',
+      category: 'PHP',
+      action: () => showPhpFunctionsPanel(),
     },
 
     // ── Git ────────────────────────────────────────────────────
@@ -9553,6 +10270,7 @@ function initHamburgerMenu() {
   initPhpTools();
   initDbAndRoutes();
   initClaudePanel();
+  initPhpFunctionsPanel();
   initSplitEditor();
   initTreeContextMenu();
   initSidebarResize();

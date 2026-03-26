@@ -202,6 +202,8 @@ contextBridge.exposeInMainWorld('api', {
 
   // ── PHP Format & PHPUnit ──
   findFile: (fileName) => ipcRenderer.invoke('fs:findFile', fileName),
+  phpFunctions: () => ipcRenderer.invoke('php:functions'),
+  phpFunctionDetail: (name) => ipcRenderer.invoke('php:functionDetail', name),
   phpResolvePsr4: (filePath) => ipcRenderer.invoke('php:resolvePsr4', filePath),
   phpResolvePsr4Route: (fqcn) => ipcRenderer.invoke('php:resolvePsr4Route', fqcn),
   phpFormat: (filePath) => ipcRenderer.invoke('php:format', filePath),

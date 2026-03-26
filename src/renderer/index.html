@@ -76,6 +76,9 @@
         <button id="btn-claude-panel" data-tooltip="Claude">
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a7 7 0 0 1 7 7c0 3-1.5 5-4 6.5V18a1 1 0 0 1-1 1h-4a1 1 0 0 1-1-1v-2.5C6.5 14 5 12 5 9a7 7 0 0 1 7-7z"/><line x1="9" y1="21" x2="15" y2="21"/><line x1="9" y1="18" x2="15" y2="18"/></svg>
         </button>
+        <button id="btn-php-functions" data-tooltip="PHP Functions">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><path d="M9 10h0" stroke-width="0" fill="currentColor"/><text x="8" y="14" font-size="8" font-weight="bold" font-family="monospace" fill="currentColor" stroke="none">fn</text></svg>
+        </button>
         <button id="btn-debug-panel" data-tooltip="Debug (Xdebug)">
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5,3 19,12 5,21" fill="currentColor" stroke="none"/><rect x="19" y="3" width="2" height="18" rx="1" fill="currentColor" stroke="none"/></svg>
         </button>
@@ -189,6 +192,15 @@
       <!-- LOG PANEL (oculto por defecto) -->
       <div id="log-panel" style="display:none">
         <div class="log-file-list" id="log-file-list"></div>
+      </div>
+
+      <!-- PHP FUNCTIONS PANEL (oculto por defecto) -->
+      <div id="php-functions-panel" style="display:none">
+        <div class="phpfn-search-box">
+          <input id="phpfn-search" type="text" placeholder="Search function... (⌘F)" autocomplete="off" spellcheck="false" />
+        </div>
+        <div id="phpfn-list" class="phpfn-list"></div>
+        <div id="phpfn-status" class="phpfn-status"></div>
       </div>
 
       <!-- GIT PANEL (oculto por defecto) -->
@@ -308,6 +320,9 @@
 
         <!-- CLAUDE DETAIL CONTAINER (skill / agent dashboard) -->
         <div id="claude-detail-container"></div>
+
+        <!-- PHP FUNCTION DETAIL CONTAINER (documentation dashboard) -->
+        <div id="php-detail-container"></div>
 
         <!-- HISTORY DETAIL CONTAINER (prompt + response view) -->
         <div id="history-detail-container"></div>
@@ -480,13 +495,20 @@
               <span class="theme-gen-hex" data-for="theme-gen-text">#eaeaea</span>
             </div>
           </div>
+          <div class="theme-gen-field">
+            <label for="theme-gen-syntax">Syntax</label>
+            <div class="theme-gen-color-row">
+              <input id="theme-gen-syntax" type="color" value="#e94560" />
+              <span class="theme-gen-hex" data-for="theme-gen-syntax">#e94560</span>
+            </div>
+          </div>
         </div>
         <div id="theme-gen-preview">
           <div class="theme-preview-bar"></div>
           <div class="theme-preview-body">
             <div class="theme-preview-sidebar"></div>
             <div class="theme-preview-editor">
-              <span class="tp-keyword">function</span> <span class="tp-function">hello</span>() {
+              <span class="tp-keyword">function</span> <span class="tp-function">hello</span>(<span class="tp-variable">$name</span>) {
               <br>&nbsp;&nbsp;<span class="tp-keyword">return</span> <span class="tp-string">"world"</span>;
               <br>}
             </div>
@@ -509,6 +531,13 @@
       <input type="checkbox" id="docker-notice-dismiss"> Don't show again
     </label>
     <button id="docker-notice-ok">Got it</button>
+  </div>
+
+  <!-- ERROR NOTIFICATION BANNER -->
+  <div id="error-notice" style="display:none">
+    <div id="error-notice-icon">✖</div>
+    <div id="error-notice-text"></div>
+    <button id="error-notice-ok">Dismiss</button>
   </div>
 
   <!-- STATUS BAR -->

@@ -755,7 +755,7 @@ function createMenu() {
             dialog.showMessageBox(mainWindow, {
               type: 'info',
               title: 'MojaveCode PHP',
-              message: 'MojaveCode PHP v3.4.0',
+              message: 'MojaveCode PHP v3.5.0',
               detail: 'A lightweight code editor by MojaveWare.\nBuilt with Electron + Monaco + xterm.js',
             });
           },
@@ -2869,6 +2869,232 @@ ipcMain.handle('php:resolvePsr4', async (event, filePath) => {
     : bestMatch.nsPrefix;
 
   return { namespace, className: fileName };
+});
+
+// ────────────────────────────────────────────────────────────────
+// 13b. IPC HANDLERS — PHP FUNCTIONS REFERENCE
+// ────────────────────────────────────────────────────────────────
+
+/**
+ * Obtiene la lista de funciones internas de PHP con sus firmas
+ * usando ReflectionFunction. Ejecuta un script PHP inline que
+ * itera get_defined_functions()['internal'] y devuelve nombre,
+ * parámetros y tipo de retorno de cada función.
+ *
+ * @returns {{ functions: Array<{name, params, returnType}>, error?: string }}
+ */
+ipcMain.handle('php:functions', async () => {
+  const phpScript = `
+    $funcs = get_defined_functions()['internal'];
+    sort($funcs);
+    $result = [];
+    foreach ($funcs as $f) {
+      try {
+        $rf = new ReflectionFunction($f);
+        $params = [];
+        foreach ($rf->getParameters() as $p) {
+          $s = '';
+          if ($p->hasType()) $s .= $p->getType() . ' ';
+          if ($p->isPassedByReference()) $s .= '&';
+          $s .= '$' . $p->getName();
+          if ($p->isOptional() && !$p->isVariadic()) $s .= ' = …';
+          if ($p->isVariadic()) $s = '...' . $s;
+          $params[] = $s;
+        }
+        $ret = $rf->hasReturnType() ? (string)$rf->getReturnType() : '';
+        $result[] = [
+          'name' => $f,
+          'params' => implode(', ', $params),
+          'returnType' => $ret,
+        ];
+      } catch (Exception $e) {
+        $result[] = ['name' => $f, 'params' => '', 'returnType' => ''];
+      }
+    }
+    echo json_encode($result);
+  `;
+
+  try {
+    const res = await runProjectCommand('php', ['-r', phpScript],
+      projectCapabilities.projectRoot || process.cwd());
+    if (res.error && !res.output) return { functions: [], error: res.error };
+    const functions = JSON.parse(res.output);
+    return { functions };
+  } catch (e) {
+    return { functions: [], error: e.message };
+  }
+});
+
+/**
+ * Obtiene documentación detallada de una función PHP específica
+ * usando ReflectionFunction. Devuelve parámetros completos con tipos,
+ * valores default, extensión, deprecación, etc.
+ *
+ * @param {string} fnName - Nombre de la función PHP
+ * @returns {{ detail: Object, error?: string }}
+ */
+ipcMain.handle('php:functionDetail', async (event, fnName) => {
+  if (!fnName) return { detail: null, error: 'No function name' };
+
+  const phpScript = `
+    try {
+      $rf = new ReflectionFunction('${fnName.replace(/'/g, "\\'")}');
+      $params = [];
+      foreach ($rf->getParameters() as $p) {
+        $param = [
+          'name' => $p->getName(),
+          'type' => $p->hasType() ? (string)$p->getType() : null,
+          'optional' => $p->isOptional(),
+          'variadic' => $p->isVariadic(),
+          'byRef' => $p->isPassedByReference(),
+          'default' => null,
+        ];
+        if ($p->isDefaultValueAvailable()) {
+          $dv = $p->getDefaultValue();
+          $param['default'] = is_string($dv) ? '"' . $dv . '"' : var_export($dv, true);
+        }
+        $params[] = $param;
+      }
+
+      // ── Generar ejemplos de uso ──
+      // Función auxiliar: valor de ejemplo según el tipo del parámetro
+      function sampleValue($type, $name) {
+        $t = strtolower((string)$type);
+        // Inferir por nombre del parámetro
+        $n = strtolower($name);
+        if (str_contains($n, 'separator') || str_contains($n, 'delimiter') || $n === 'glue') return "', '";
+        if (str_contains($n, 'pattern') || str_contains($n, 'regex')) return "'/[0-9]+/'";
+        if (str_contains($n, 'replace') || str_contains($n, 'replacement')) return "'new'";
+        if (str_contains($n, 'filename') || str_contains($n, 'file') || str_contains($n, 'path') || str_contains($n, 'directory')) return "'/path/to/file.txt'";
+        if (str_contains($n, 'url')) return "'https://example.com'";
+        if (str_contains($n, 'format')) return "'Y-m-d H:i:s'";
+        if (str_contains($n, 'encoding') || str_contains($n, 'charset')) return "'UTF-8'";
+        if (str_contains($n, 'offset') || str_contains($n, 'start') || str_contains($n, 'position')) return '0';
+        if (str_contains($n, 'length') || str_contains($n, 'limit') || str_contains($n, 'count') || str_contains($n, 'size')) return '10';
+        if (str_contains($n, 'callback') || str_contains($n, 'func')) return "function(\\$v) { return \\$v; }";
+        if (str_contains($n, 'key')) return "'key'";
+        if (str_contains($n, 'value') || str_contains($n, 'val')) return "'value'";
+        // Inferir por tipo
+        if (str_contains($t, 'string')) return "'hello world'";
+        if (str_contains($t, 'int') || str_contains($t, 'float') || str_contains($t, 'number')) return '42';
+        if (str_contains($t, 'bool')) return 'true';
+        if (str_contains($t, 'array')) return "['a', 'b', 'c']";
+        if (str_contains($t, 'callable')) return "function(\\$v) { return \\$v; }";
+        if ($t === 'null' || $t === '') return "'example'";
+        return "'example'";
+      }
+
+      $examples = [];
+      $name = $rf->getName();
+      $allParams = $rf->getParameters();
+      $reqCount = $rf->getNumberOfRequiredParameters();
+
+      // Caso 1: Solo parámetros requeridos
+      $reqArgs = [];
+      for ($i = 0; $i < $reqCount; $i++) {
+        $p = $allParams[$i];
+        if ($p->isVariadic()) {
+          $reqArgs[] = sampleValue($p->hasType() ? (string)$p->getType() : '', $p->getName());
+        } else {
+          $reqArgs[] = sampleValue($p->hasType() ? (string)$p->getType() : '', $p->getName());
+        }
+      }
+      $reqCall = "\\$result = {$name}(" . implode(', ', $reqArgs) . ");";
+      if ($reqCount > 0 || count($allParams) === 0) {
+        $examples[] = [
+          'title' => 'Basic usage' . ($reqCount < count($allParams) ? ' (required params only)' : ''),
+          'code' => $reqCall,
+        ];
+      }
+
+      // Caso 2: Todos los parámetros (si hay opcionales)
+      if (count($allParams) > $reqCount) {
+        $allArgs = [];
+        foreach ($allParams as $p) {
+          if ($p->isVariadic()) {
+            $sv = sampleValue($p->hasType() ? (string)$p->getType() : '', $p->getName());
+            $allArgs[] = $sv . ', ' . $sv;
+          } elseif ($p->isDefaultValueAvailable()) {
+            $dv = $p->getDefaultValue();
+            $allArgs[] = is_string($dv) ? "'" . addslashes($dv) . "'" : var_export($dv, true);
+          } else {
+            $allArgs[] = sampleValue($p->hasType() ? (string)$p->getType() : '', $p->getName());
+          }
+        }
+        $fullCall = "\\$result = {$name}(" . implode(', ', $allArgs) . ");";
+        $examples[] = [
+          'title' => 'With all parameters',
+          'code' => $fullCall,
+        ];
+      }
+
+      // Caso 3: Uso con variable + var_dump
+      if ($rf->hasReturnType()) {
+        $rt = (string)$rf->getReturnType();
+        $simpleArgs = implode(', ', $reqArgs);
+        if (str_contains($rt, 'string')) {
+          $examples[] = [
+            'title' => 'Using the return value',
+            'code' => "\\$output = {$name}({$simpleArgs});\\necho \\$output; // string",
+          ];
+        } elseif (str_contains($rt, 'array')) {
+          $examples[] = [
+            'title' => 'Iterating the result',
+            'code' => "\\$items = {$name}({$simpleArgs});\\nforeach (\\$items as \\$key => \\$val) {\\n    echo \\\"\\$key: \\$val\\\\n\\\";\\n}",
+          ];
+        } elseif (str_contains($rt, 'bool')) {
+          $examples[] = [
+            'title' => 'Conditional check',
+            'code' => "if ({$name}({$simpleArgs})) {\\n    echo 'Condition met';\\n} else {\\n    echo 'Condition not met';\\n}",
+          ];
+        } elseif (str_contains($rt, 'int') || str_contains($rt, 'float')) {
+          $examples[] = [
+            'title' => 'Numeric result',
+            'code' => "\\$n = {$name}({$simpleArgs});\\necho \\\"Result: \\$n\\\";",
+          ];
+        }
+      }
+
+      // Caso 4: Error handling si la función puede fallar
+      $canFail = str_contains(strtolower($name), 'file') || str_contains(strtolower($name), 'open')
+        || str_contains(strtolower($name), 'connect') || str_contains(strtolower($name), 'read')
+        || str_contains(strtolower($name), 'write') || str_contains(strtolower($name), 'json')
+        || str_contains(strtolower($name), 'curl') || str_contains(strtolower($name), 'preg');
+      if ($canFail) {
+        $simpleArgs = implode(', ', $reqArgs);
+        $examples[] = [
+          'title' => 'Error handling',
+          'code' => "\\$result = {$name}({$simpleArgs});\\nif (\\$result === false) {\\n    echo 'Error: operation failed';\\n}",
+        ];
+      }
+
+      $result = [
+        'name' => $rf->getName(),
+        'params' => $params,
+        'returnType' => $rf->hasReturnType() ? (string)$rf->getReturnType() : null,
+        'extension' => $rf->getExtensionName() ?: 'Core',
+        'deprecated' => $rf->isDeprecated(),
+        'numRequired' => $rf->getNumberOfRequiredParameters(),
+        'numTotal' => $rf->getNumberOfParameters(),
+        'returnsRef' => $rf->returnsReference(),
+        'examples' => $examples,
+      ];
+      echo json_encode($result);
+    } catch (Exception $e) {
+      echo json_encode(['error' => $e->getMessage()]);
+    }
+  `;
+
+  try {
+    const res = await runProjectCommand('php', ['-r', phpScript],
+      projectCapabilities.projectRoot || process.cwd());
+    if (res.error && !res.output) return { detail: null, error: res.error };
+    const parsed = JSON.parse(res.output);
+    if (parsed.error) return { detail: null, error: parsed.error };
+    return { detail: parsed };
+  } catch (e) {
+    return { detail: null, error: e.message };
+  }
 });
 
 // ────────────────────────────────────────────

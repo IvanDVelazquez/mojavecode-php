@@ -301,7 +301,20 @@ Panel en el sidebar (icono de bombilla en la barra de acciones) que lee el direc
 | `Cmd+Alt+=` | UI Zoom acercar (sidebar/paneles) |
 | `Cmd+Alt+-` | UI Zoom alejar (sidebar/paneles) |
 | `Cmd+Alt+0` | UI Zoom resetear (sidebar/paneles) |
-| `Cmd+D` | Agregar seleccion a la siguiente coincidencia (multi-cursor) |
+| `Cmd+/` o `Cmd+7` | Comentar/descomentar línea |
+| `Cmd+Shift+/` | Comentar/descomentar bloque |
+| `Cmd+Shift+K` | Eliminar línea |
+| `Alt+↑` / `Alt+↓` | Mover línea arriba/abajo |
+| `Alt+Shift+↑` / `Alt+Shift+↓` | Copiar línea arriba/abajo |
+| `Cmd+D` | Agregar selección a la siguiente coincidencia (multi-cursor) |
+| `Cmd+Shift+L` | Seleccionar todas las coincidencias |
+| `Cmd+L` | Seleccionar línea actual |
+| `Cmd+Shift+D` | Duplicar línea/selección |
+| `Cmd+Enter` | Insertar línea debajo |
+| `Cmd+Shift+Enter` | Insertar línea arriba |
+| `Cmd+]` / `Cmd+[` | Indentar / Desindentar |
+| `Cmd+Shift+]` / `Cmd+Shift+[` | Desplegar / Plegar |
+| `Cmd+G` | Ir a línea |
 | `F5` | Continuar (debug) |
 | `F10` | Step Over (debug) |
 | `F11` | Step Into (debug) |
@@ -456,6 +469,14 @@ Sin dependencias adicionales de runtime para acceso a base de datos (usa CLI de 
 ---
 
 ## Changelog
+
+### v3.5.0
+
+- **Atajos de VS Code** — Set completo de atajos de teclado de VS Code: comentar líneas (`Cmd+/`, `Cmd+7` para teclados en español), eliminar/mover/copiar/duplicar líneas, selección multi-cursor, fold/unfold, ir a línea, y más. Funciona en ambos editores (principal y split)
+- **Referencia de Funciones PHP** — Nuevo panel en el sidebar que lista todas las funciones internas de PHP con sus firmas. Click en cualquier función abre un tab de documentación con parámetros detallados, tipos de retorno, ejemplos de uso y link a php.net
+- **Color de Sintaxis en Temas Custom** — El generador de temas ahora tiene un 4to color picker (Syntax) que controla el syntax highlighting independiente del color accent UI. Elimina colores verdes/violetas heredados de los temas base via `inherit: false`
+- **Notificación de Errores** — Banner bordo que aparece sobre la barra de estado cada vez que se loguea un error, con auto-dismiss a los 6 segundos
+- **Posición de Tooltips** — Los tooltips de la barra de acciones ahora aparecen debajo de los íconos en vez de a la derecha
 
 ### v3.4.0
 

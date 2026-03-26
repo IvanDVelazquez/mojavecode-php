@@ -285,7 +285,20 @@ A sidebar panel (lightbulb icon in the action bar) that reads the project's `.cl
 | `Cmd+Alt+=` | UI Zoom in (sidebar/panels) |
 | `Cmd+Alt+-` | UI Zoom out (sidebar/panels) |
 | `Cmd+Alt+0` | UI Zoom reset (sidebar/panels) |
+| `Cmd+/` or `Cmd+7` | Toggle line comment |
+| `Cmd+Shift+/` | Toggle block comment |
+| `Cmd+Shift+K` | Delete line |
+| `Alt+↑` / `Alt+↓` | Move line up/down |
+| `Alt+Shift+↑` / `Alt+Shift+↓` | Copy line up/down |
 | `Cmd+D` | Add selection to next match (multi-cursor) |
+| `Cmd+Shift+L` | Select all occurrences |
+| `Cmd+L` | Select current line |
+| `Cmd+Shift+D` | Duplicate line/selection |
+| `Cmd+Enter` | Insert line below |
+| `Cmd+Shift+Enter` | Insert line above |
+| `Cmd+]` / `Cmd+[` | Indent / Outdent |
+| `Cmd+Shift+]` / `Cmd+Shift+[` | Unfold / Fold |
+| `Cmd+G` | Go to Line |
 | `F5` | Continue (debug) |
 | `F10` | Step Over (debug) |
 | `F11` | Step Into (debug) |
@@ -439,6 +452,14 @@ No additional runtime dependencies for database access (uses `mysql`/`psql` CLI)
 ---
 
 ## Changelog
+
+### v3.5.0
+
+- **VS Code Keybindings** — Full set of VS Code keyboard shortcuts: toggle comments (`Cmd+/`, `Cmd+7` for Spanish keyboards), delete/move/copy/duplicate lines, multi-cursor selection, fold/unfold, go to line, and more. Works in both main and split editors
+- **PHP Functions Reference** — New sidebar panel listing all PHP internal functions with signatures. Click any function to open a documentation tab with full parameter details, return types, usage examples, and a link to php.net
+- **Custom Theme Syntax Color** — Theme generator now has a 4th color picker (Syntax) that controls syntax highlighting independently from the UI accent color. Eliminates inherited green/purple colors from base themes via `inherit: false`
+- **Error Notification Banner** — Burgundy notification banner appears above the status bar whenever an error is logged, with auto-dismiss after 6 seconds
+- **Sidebar Tooltip Position** — Action bar tooltips now appear below the icons instead of to the right
 
 ### v3.4.0
 
