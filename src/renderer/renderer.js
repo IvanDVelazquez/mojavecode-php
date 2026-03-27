@@ -198,6 +198,7 @@ function initEditor() {
       smoothScrolling: true,
       cursorBlinking: 'smooth',
       cursorSmoothCaretAnimation: 'on',
+      stickyScroll: { enabled: true, maxLineCount: 5, defaultModel: 'outlineModel' },
     }
   );
 
@@ -596,6 +597,35 @@ function updateDockerEnvBadge(caps) {
     el.textContent = `🐳 ${caps.dockerContainer}`;
     el.className = 'env-docker';
     el.title = `Docker exec active — container: ${caps.dockerContainer}\nworkdir: ${caps.dockerWorkdir}`;
+    el.style.display = 'flex';
+  } else {
+    el.style.display = 'none';
+    el.className = '';
+  }
+}
+
+/**
+ * Actualiza el badge de framework en el status bar.
+ * Muestra el nombre del framework detectado (Laravel, Slim, Symfony)
+ * o lo oculta si es un proyecto PHP genérico.
+ *
+ * @param {object} caps - projectCapabilities del main process
+ */
+function updateFrameworkBadge(caps) {
+  const el = document.getElementById('status-framework');
+  if (!el) return;
+
+  const fw = caps.framework || 'generic-php';
+  const labels = {
+    laravel: '⚡ Laravel',
+    slim: '🔹 Slim',
+    symfony: '🎵 Symfony',
+  };
+
+  if (labels[fw]) {
+    el.textContent = labels[fw];
+    el.className = `fw-${fw}`;
+    el.title = `${labels[fw]} project detected`;
     el.style.display = 'flex';
   } else {
     el.style.display = 'none';
@@ -2220,6 +2250,46 @@ function registerVSCodeKeybindings(ed) {
     keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Space],
     run: (e) => e.getAction('editor.action.triggerSuggest').run(),
   });
+
+  // ── Context menu: Search in PHP Documentation ──────────────
+  ed.addAction({
+    id: 'mojavecode.phpDocLookup',
+    label: 'Search in PHP Documentation',
+    contextMenuGroupId: 'navigation',
+    contextMenuOrder: 1.5,
+    run: (e) => {
+      // Obtener la palabra bajo el cursor o la selección
+      const sel = e.getSelection();
+      let word = '';
+      if (!sel.isEmpty()) {
+        word = e.getModel().getValueInRange(sel).trim();
+      } else {
+        const pos = e.getPosition();
+        const wordAt = e.getModel().getWordAtPosition(pos);
+        if (wordAt) word = wordAt.word;
+      }
+      if (!word) return;
+
+      // Buscar en el cache de funciones PHP
+      const fnName = word.toLowerCase();
+      const cache = phpFunctionsCache.functions;
+      if (cache) {
+        const match = cache.find(f => f.name === fnName);
+        if (match) {
+          openPhpDetail(match);
+          return;
+        }
+      }
+      // Si no hay cache o no se encontró, abrir el panel con la búsqueda
+      showPhpFunctionsPanel();
+      const searchEl = document.getElementById('phpfn-search');
+      if (searchEl) {
+        searchEl.value = fnName;
+        filterPhpFunctions(fnName);
+        searchEl.focus();
+      }
+    },
+  });
 }
 
 function ensureRightEditor() {
@@ -2244,6 +2314,7 @@ function ensureRightEditor() {
       smoothScrolling: true,
       cursorBlinking: 'smooth',
       cursorSmoothCaretAnimation: 'on',
+      stickyScroll: { enabled: true, maxLineCount: 5, defaultModel: 'outlineModel' },
     }
   );
 
@@ -3460,6 +3531,104 @@ function extractSymbols(content, language) {
 
   return symbols;
 }
+
+// ── DocumentSymbolProvider para sticky scroll ────────────────
+// Monaco necesita un DocumentSymbolProvider registrado para que
+// stickyScroll en modo 'outlineModel' muestre los nombres de
+// funciones y clases en vez de solo las llaves '{'.
+// Reutiliza extractSymbols() que ya parsea el código con regex.
+(function registerDocumentSymbolProviders() {
+  const kindMap = {
+    class:     monaco.languages.SymbolKind.Class,
+    interface: monaco.languages.SymbolKind.Interface,
+    function:  monaco.languages.SymbolKind.Function,
+    method:    monaco.languages.SymbolKind.Method,
+    property:  monaco.languages.SymbolKind.Property,
+    const:     monaco.languages.SymbolKind.Constant,
+    variable:  monaco.languages.SymbolKind.Variable,
+  };
+
+  /**
+   * Crea un DocumentSymbolProvider que usa extractSymbols para
+   * generar un árbol jerárquico de símbolos (clases con métodos
+   * anidados). Esto alimenta el sticky scroll con las líneas
+   * de declaración correctas (function foo(), class Bar) en vez
+   * de las llaves '{'.
+   */
+  function createSymbolProvider(langId) {
+    return {
+      provideDocumentSymbols(model) {
+        const content = model.getValue();
+        const symbols = extractSymbols(content, langId);
+        const lines = content.split('\n');
+        const result = [];
+        let currentContainer = null;
+
+        for (const sym of symbols) {
+          const lineIdx = sym.line - 1;
+          const lineText = lines[lineIdx] || '';
+          // Buscar el cierre del bloque: la llave de cierre al mismo nivel de indentación
+          const indent = lineText.search(/\S/);
+          let endLine = sym.line;
+          let braceCount = 0;
+          let foundOpen = false;
+          for (let i = lineIdx; i < lines.length; i++) {
+            for (const ch of lines[i]) {
+              if (ch === '{') { braceCount++; foundOpen = true; }
+              if (ch === '}') braceCount--;
+            }
+            if (foundOpen && braceCount <= 0) {
+              endLine = i + 1;
+              break;
+            }
+          }
+          // Si no encontró cierre, usar la última línea del archivo
+          if (!foundOpen || braceCount > 0) endLine = lines.length;
+
+          const range = {
+            startLineNumber: sym.line,
+            startColumn: 1,
+            endLineNumber: endLine,
+            endColumn: (lines[endLine - 1] || '').length + 1,
+          };
+
+          const symbolInfo = {
+            name: sym.name,
+            detail: '',
+            kind: kindMap[sym.kind] || monaco.languages.SymbolKind.Function,
+            range: range,
+            selectionRange: {
+              startLineNumber: sym.line,
+              startColumn: Math.max(1, indent + 1),
+              endLineNumber: sym.line,
+              endColumn: lineText.length + 1,
+            },
+            children: [],
+          };
+
+          if (sym.depth === 0 && (sym.kind === 'class' || sym.kind === 'interface')) {
+            currentContainer = symbolInfo;
+            result.push(symbolInfo);
+          } else if (currentContainer && sym.depth > 0) {
+            currentContainer.children.push(symbolInfo);
+          } else {
+            currentContainer = null;
+            result.push(symbolInfo);
+          }
+        }
+
+        return result;
+      },
+    };
+  }
+
+  // Registrar para todos los lenguajes soportados por extractSymbols
+  const langs = ['php', 'javascript', 'typescript', 'typescriptreact',
+    'javascriptreact', 'python', 'java', 'go', 'ruby', 'rust', 'css', 'scss', 'less'];
+  for (const lang of langs) {
+    monaco.languages.registerDocumentSymbolProvider(lang, createSymbolProvider(lang));
+  }
+})();
 
 // ─── Model & Method call highlighting ───
 let modelDecorationCollection = null;
@@ -5450,6 +5619,7 @@ function initEventListeners() {
   window.api.onProjectCapabilities((caps) => {
     state.projectCaps = caps;
     updateDockerEnvBadge(caps);
+    updateFrameworkBadge(caps);
     showDockerNoticeIfNeeded(caps);
   });
 
@@ -7521,7 +7691,7 @@ function buildCommandRegistry() {
       id: 'laravel.routeList',
       label: 'Open Route List',
       category: 'Laravel',
-      condition: () => state.projectCaps && state.projectCaps.hasArtisan,
+      condition: () => state.projectCaps && (state.projectCaps.hasArtisan || state.projectCaps.framework === 'slim'),
       action: () => openRouteList(),
     },
   ];
@@ -8770,30 +8940,42 @@ async function loadRouteList() {
   const container = document.getElementById('route-list-container');
   container.innerHTML = '<div class="db-loading">Loading routes...</div>';
 
-  const result = await window.api.laravelRouteList();
-  if (result.error) {
-    const detail = [result.error, result.output].filter(Boolean).join('\n\n');
-    container.innerHTML = `
-      <div class="db-error">Failed to load routes</div>
-      <pre class="route-raw-output">${escapeHtml(detail)}</pre>`;
-    console.error('[Route List]', detail);
-    return;
-  }
+  const fw = state.projectCaps?.framework || 'generic-php';
 
+  // ── Cargar rutas según el framework ──
   let routes;
-  try {
-    routes = JSON.parse(result.output);
-  } catch (parseErr) {
-    const detail = [
-      `JSON parse error: ${parseErr.message}`,
-      result.output ? `stdout:\n${result.output}` : null,
-      result.error ? `stderr:\n${result.error}` : null,
-    ].filter(Boolean).join('\n\n');
-    container.innerHTML = `
-      <div class="db-error">Failed to parse route list. Make sure your Laravel app can boot.</div>
-      <pre class="route-raw-output">${escapeHtml(detail)}</pre>`;
-    console.error('[Route List]', detail);
-    return;
+  if (fw === 'slim') {
+    const result = await window.api.slimRouteList();
+    if (result.error) {
+      container.innerHTML = `<div class="db-error">${escapeHtml(result.error)}</div>`;
+      return;
+    }
+    routes = result.routes || [];
+  } else {
+    // Laravel (u otro con artisan route:list)
+    const result = await window.api.laravelRouteList();
+    if (result.error) {
+      const detail = [result.error, result.output].filter(Boolean).join('\n\n');
+      container.innerHTML = `
+        <div class="db-error">Failed to load routes</div>
+        <pre class="route-raw-output">${escapeHtml(detail)}</pre>`;
+      console.error('[Route List]', detail);
+      return;
+    }
+    try {
+      routes = JSON.parse(result.output);
+    } catch (parseErr) {
+      const detail = [
+        `JSON parse error: ${parseErr.message}`,
+        result.output ? `stdout:\n${result.output}` : null,
+        result.error ? `stderr:\n${result.error}` : null,
+      ].filter(Boolean).join('\n\n');
+      container.innerHTML = `
+        <div class="db-error">Failed to parse route list. Make sure your Laravel app can boot.</div>
+        <pre class="route-raw-output">${escapeHtml(detail)}</pre>`;
+      console.error('[Route List]', detail);
+      return;
+    }
   }
 
   if (!routes.length) {
@@ -8807,11 +8989,17 @@ async function loadRouteList() {
     PUT: 'route-method-put',
     PATCH: 'route-method-patch',
     DELETE: 'route-method-delete',
+    GROUP: 'route-method-group',
   };
+
+  // Slim usa 'handler' + 'file', Laravel usa 'action' + 'name'
+  const isSlim = fw === 'slim';
+  const actionCol = isSlim ? 'Handler' : 'Action';
+  const nameCol = isSlim ? 'File' : 'Name';
 
   let html = `
     <div class="route-header">
-      <span class="route-header-count">${routes.length} routes</span>
+      <span class="route-header-count">${routes.length} routes${isSlim ? ' (Slim)' : ''}</span>
       <div class="route-search-bar" id="route-search-bar" style="display:none">
         <input id="route-search-input" type="text" placeholder="Filter routes..." autocomplete="off" spellcheck="false" />
         <span id="route-search-count" class="route-search-count"></span>
@@ -8822,8 +9010,8 @@ async function loadRouteList() {
       <div class="route-table-head">
         <span class="route-col-method">Method</span>
         <span class="route-col-uri">URI</span>
-        <span class="route-col-name">Name</span>
-        <span class="route-col-action">Action</span>
+        <span class="route-col-name">${nameCol}</span>
+        <span class="route-col-action">${actionCol}</span>
       </div>`;
 
   for (const route of routes) {
@@ -8832,14 +9020,19 @@ async function loadRouteList() {
       `<span class="route-method-badge ${methodColors[m] || ''}">${escapeHtml(m)}</span>`
     ).join('');
 
-    const action = route.action || '';
-    const isController = action.includes('@') || action.includes('Controller');
+    const action = isSlim ? (route.handler || '') : (route.action || '');
+    const name = isSlim ? (route.file ? `${route.file}:${route.line}` : '') : (route.name || '');
+    const isClickable = isSlim
+      ? !!(route.file && route.line)
+      : (action.includes('@') || action.includes('Controller'));
 
     html += `
-      <div class="route-row${isController ? ' route-clickable' : ''}" ${isController ? `data-action="${escapeAttr(action)}"` : ''}>
+      <div class="route-row${isClickable ? ' route-clickable' : ''}"
+        ${isClickable ? `data-action="${escapeAttr(action)}"` : ''}
+        ${isSlim && route.file ? `data-file="${escapeAttr(route.file)}" data-line="${route.line}"` : ''}>
         <span class="route-col-method">${methodBadges}</span>
         <span class="route-col-uri">${escapeHtml(route.uri || '')}</span>
-        <span class="route-col-name">${escapeHtml(route.name || '')}</span>
+        <span class="route-col-name">${escapeHtml(name)}</span>
         <span class="route-col-action">${escapeHtml(action)}</span>
       </div>`;
   }
@@ -8847,30 +9040,48 @@ async function loadRouteList() {
   html += '</div>';
   container.innerHTML = html;
 
-  // Click en controller → resolver via PSR-4, fallback a búsqueda por nombre
+  // ── Click handlers ──
   container.querySelectorAll('.route-clickable').forEach((row) => {
     row.addEventListener('click', async () => {
+      if (isSlim) {
+        // Slim: abrir el archivo fuente en la línea de la ruta
+        const file = row.dataset.file;
+        const line = parseInt(row.dataset.line, 10) || 1;
+        if (file && state.currentFolder) {
+          const fullPath = state.currentFolder + '/' + file;
+          const fileName = file.split('/').pop();
+          openFile(fullPath, fileName);
+          // Ir a la línea después de que se abra
+          setTimeout(() => {
+            if (state.editor) {
+              state.editor.revealLineInCenter(line);
+              state.editor.setPosition({ lineNumber: line, column: 1 });
+              state.editor.focus();
+            }
+          }, 200);
+        }
+        return;
+      }
+
+      // Laravel: resolver via PSR-4
       const action = row.dataset.action;
       if (!action || !state.currentFolder) return;
 
       const controllerClass = action.split('@')[0];
       const classFileName = controllerClass.split('\\').pop() + '.php';
 
-      // 1. Intentar resolver via PSR-4 (composer.json autoload)
       const resolved = await window.api.phpResolvePsr4Route(controllerClass);
       if (resolved && resolved.path) {
         openFile(resolved.path, classFileName);
         return;
       }
 
-      // 2. Fallback: buscar el archivo por nombre en el proyecto
       const searchResult = await window.api.findFile(classFileName);
       if (searchResult && searchResult.path) {
         openFile(searchResult.path, classFileName);
         return;
       }
 
-      // 3. Último fallback: construir path manual
       const root = state.projectCaps?.projectRoot || state.currentFolder;
       const filePath = controllerClass.replace(/\\/g, '/').replace(/^App\//, 'app/') + '.php';
       openFile(root + '/' + filePath, classFileName);

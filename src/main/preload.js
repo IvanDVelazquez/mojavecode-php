@@ -240,8 +240,9 @@ contextBridge.exposeInMainWorld('api', {
   dbExecute: (sql, connKey) => ipcRenderer.invoke('db:execute', sql, connKey),
   dbExport: (type, tableName, connKey) => ipcRenderer.invoke('db:export', type, tableName, connKey),
 
-  // ── Laravel Route List ──
+  // ── Route List ──
   laravelRouteList: () => ipcRenderer.invoke('laravel:routeList'),
+  slimRouteList: () => ipcRenderer.invoke('slim:routeList'),
 
   // ── Claude Panel ──
   claudeRead: (folder) => ipcRenderer.invoke('claude:read', folder),

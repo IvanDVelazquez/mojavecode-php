@@ -453,6 +453,13 @@ No additional runtime dependencies for database access (uses `mysql`/`psql` CLI)
 
 ## Changelog
 
+### v3.6.0
+
+- **Framework Detection** — Automatically detects Laravel, Slim, or Symfony projects from `composer.json`. Shows a colored badge in the status bar (red for Laravel, green for Slim, black for Symfony)
+- **Slim Route Support** — Route List now works with Slim 3/4 projects. Parses `$app->get()`, `$app->post()`, `$app->group()` patterns from PHP source files. Click a route to jump to its definition
+- **Sticky Scroll (Outline)** — Scrolling through code now shows the current class and function name pinned at the top of the editor, instead of just braces. Powered by a custom DocumentSymbolProvider for all supported languages
+- **PHP Doc Lookup (Context Menu)** — Right-click any function name in the editor and select "Search in PHP Documentation" to open its detail tab with full signature, parameters, examples, and php.net link
+
 ### v3.5.1
 
 - **PHP Function Descriptions** — Every function in the PHP Functions Reference panel now shows a one-line description. ~300 common functions have curated descriptions; the rest are inferred from prefix family or extension. Search also matches descriptions (e.g., type "sort" or "hash" to find relevant functions)

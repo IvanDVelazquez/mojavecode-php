@@ -225,6 +225,7 @@ let projectCapabilities = {
   formatOnSave: false, // desactivado por defecto
   autoSave: false, // auto-save desactivado por defecto
   projectRoot: null,
+  framework: 'generic-php', // 'laravel' | 'slim' | 'symfony' | 'generic-php'
 };
 
 // ────────────────────────────────────────────
@@ -431,7 +432,7 @@ function createMenu() {
           label: 'Database Viewer',
           click: () => mainWindow?.webContents.send('menu:db-viewer'),
         },
-        ...(projectCapabilities.hasArtisan ? [{
+        ...((projectCapabilities.hasArtisan || projectCapabilities.framework === 'slim') ? [{
           label: 'Route List',
           click: () => mainWindow?.webContents.send('menu:route-list'),
         }] : []),
@@ -755,7 +756,7 @@ function createMenu() {
             dialog.showMessageBox(mainWindow, {
               type: 'info',
               title: 'MojaveCode PHP',
-              message: 'MojaveCode PHP v3.5.1',
+              message: 'MojaveCode PHP v3.6.0',
               detail: 'A lightweight code editor by MojaveWare.\nBuilt with Electron + Monaco + xterm.js',
             });
           },
@@ -827,12 +828,24 @@ function detectProjectCapabilities(folderPath) {
   projectCapabilities.hasComposer = fs.existsSync(path.join(folderPath, 'composer.json'));
   projectCapabilities.hasArtisan = fs.existsSync(path.join(folderPath, 'artisan'));
 
-  // Detectar nwidart/laravel-modules
+  // ── Detectar framework y dependencias desde composer.json ──
   projectCapabilities.hasModules = false;
+  projectCapabilities.framework = 'generic-php';
   if (projectCapabilities.hasComposer) {
     try {
       const composerJson = JSON.parse(fs.readFileSync(path.join(folderPath, 'composer.json'), 'utf-8'));
       const allDeps = { ...composerJson.require, ...composerJson['require-dev'] };
+
+      // Framework detection por dependencia principal
+      if (allDeps['laravel/framework'] || projectCapabilities.hasArtisan) {
+        projectCapabilities.framework = 'laravel';
+      } else if (allDeps['slim/slim']) {
+        projectCapabilities.framework = 'slim';
+      } else if (allDeps['symfony/framework-bundle'] || allDeps['symfony/symfony']) {
+        projectCapabilities.framework = 'symfony';
+      }
+
+      // nwidart/laravel-modules
       if (allDeps['nwidart/laravel-modules']) {
         projectCapabilities.hasModules = true;
       }
@@ -3584,6 +3597,133 @@ ipcMain.handle('laravel:routeList', async (event) => {
   }
   return runProjectCommand('php', ['artisan', 'route:list', '--json', '--no-interaction'], projectCapabilities.projectRoot);
 });
+
+// ────────────────────────────────────────────────────────────────
+// 14b. IPC HANDLERS — SLIM ROUTE PARSER
+// ────────────────────────────────────────────────────────────────
+//
+// Slim 3/4 no tiene un CLI para listar rutas. En vez de eso,
+// parseamos los archivos PHP del proyecto buscando patrones de
+// definición de rutas: $app->get(), $app->post(), $group(), etc.
+// También detecta rutas registradas en archivos de configuración
+// como routes.php, web.php, api.php, etc.
+//
+// Busca recursivamente en:
+//   - src/routes/  (convención Slim skeleton)
+//   - routes/      (convención alternativa)
+//   - app/         (proyectos custom)
+//   - Archivo raíz index.php, routes.php
+// ────────────────────────────────────────────────────────────────
+
+/**
+ * Parsea rutas Slim desde los archivos PHP del proyecto.
+ *
+ * Busca patrones como:
+ *   $app->get('/path', handler)
+ *   $app->post('/path', 'Controller:method')
+ *   $app->group('/prefix', function() { ... })
+ *   $this->get('/path', handler)   (dentro de groups)
+ *
+ * @returns {{ routes: Array<{method, uri, handler, file, line}>, error?: string }}
+ */
+ipcMain.handle('slim:routeList', async () => {
+  const root = projectCapabilities.projectRoot;
+  if (!root) return { routes: [], error: 'No project open' };
+
+  // ── Encontrar archivos PHP candidatos ──
+  const candidates = [];
+  const routeDirs = ['routes', 'src/routes', 'app', 'app/routes', 'src'];
+  const rootFiles = ['routes.php', 'index.php', 'public/index.php', 'app.php'];
+
+  // Archivos raíz
+  for (const f of rootFiles) {
+    const full = path.join(root, f);
+    if (fs.existsSync(full)) candidates.push(full);
+  }
+
+  // Directorios de rutas (buscar .php recursivamente, max 3 niveles)
+  for (const dir of routeDirs) {
+    const full = path.join(root, dir);
+    if (fs.existsSync(full) && fs.statSync(full).isDirectory()) {
+      collectPhpFiles(full, candidates, 0, 3);
+    }
+  }
+
+  if (!candidates.length) return { routes: [], error: 'No route files found' };
+
+  // ── Parsear rutas de cada archivo ──
+  const routes = [];
+  const httpMethods = ['get', 'post', 'put', 'patch', 'delete', 'options', 'any', 'map'];
+  // Regex para: $app->method('/uri', handler)  o  $this->method('/uri', handler)
+  //             $app->group('/prefix', ...)
+  const routeRe = /(?:\$app|\$this|\$group)\s*->\s*(get|post|put|patch|delete|options|any|map|group)\s*\(\s*['"`]([^'"`]+)['"`]/gi;
+
+  for (const filePath of candidates) {
+    try {
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const lines = content.split(/\r?\n/);
+      const relPath = path.relative(root, filePath).replace(/\\/g, '/');
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        let m;
+        routeRe.lastIndex = 0;
+        while ((m = routeRe.exec(line)) !== null) {
+          const method = m[1].toUpperCase();
+          const uri = m[2];
+
+          // Intentar extraer el handler del resto de la línea
+          let handler = '';
+          const afterUri = line.slice(m.index + m[0].length);
+          // Patrón: 'Controller:method' o Controller::class
+          const handlerMatch = afterUri.match(/,\s*['"`]([^'"`]+)['"`]/) ||
+                                afterUri.match(/,\s*([\w\\]+::class)/) ||
+                                afterUri.match(/,\s*\[([\w\\]+)::class,\s*['"`](\w+)['"`]\]/);
+          if (handlerMatch) {
+            handler = handlerMatch[2]
+              ? `${handlerMatch[1]}::${handlerMatch[2]}`
+              : handlerMatch[1];
+          } else if (afterUri.match(/,\s*function/)) {
+            handler = 'Closure';
+          }
+
+          routes.push({
+            method: method === 'GROUP' ? 'GROUP' : method,
+            uri,
+            handler,
+            file: relPath,
+            line: i + 1,
+          });
+        }
+      }
+    } catch { /* skip unreadable files */ }
+  }
+
+  return { routes };
+});
+
+/**
+ * Recorre un directorio recursivamente recolectando archivos .php.
+ * @param {string} dir - Directorio a recorrer
+ * @param {string[]} out - Array donde acumular paths
+ * @param {number} depth - Profundidad actual
+ * @param {number} maxDepth - Profundidad máxima
+ */
+function collectPhpFiles(dir, out, depth, maxDepth) {
+  if (depth > maxDepth) return;
+  try {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.name.startsWith('.') || entry.name === 'vendor' || entry.name === 'node_modules') continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        collectPhpFiles(full, out, depth + 1, maxDepth);
+      } else if (entry.isFile() && entry.name.endsWith('.php')) {
+        out.push(full);
+      }
+    }
+  } catch { /* skip unreadable dirs */ }
+}
 
 // ────────────────────────────────────────────
 // 15. IPC HANDLERS — CLAUDE PANEL

@@ -2218,6 +2218,25 @@ body.theme-ready {
 #status-docker-env.env-sail   { background: #0ea5e9; } /* azul Sail */
 #status-docker-env.env-docker { background: #2496ed; } /* azul Docker */
 
+/* Badge de framework detectado en status bar */
+#status-framework {
+  display: none;
+  align-items: center;
+  gap: 4px;
+  padding: 0 7px;
+  height: 18px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: #fff;
+  cursor: default;
+  white-space: nowrap;
+}
+#status-framework.fw-laravel  { background: #ff2d20; } /* rojo Laravel */
+#status-framework.fw-slim     { background: #74a045; } /* verde Slim */
+#status-framework.fw-symfony  { background: #000; }     /* negro Symfony */
+
 .status-git-btn {
   background: none;
   border: none;
@@ -4336,6 +4355,7 @@ body.theme-ready {
 .route-method-put { background: rgba(247, 167, 62, 0.2); color: var(--accent-yellow); }
 .route-method-patch { background: rgba(247, 167, 62, 0.2); color: var(--accent-yellow); }
 .route-method-delete { background: rgba(232, 83, 36, 0.2); color: var(--accent-red); }
+.route-method-group  { background: rgba(107, 135, 168, 0.2); color: var(--text-muted); }
 
 /* ─── SEARCH BAR (Routes & Database) ─── */
 .route-search-bar,
