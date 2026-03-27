@@ -273,14 +273,15 @@ function initEditor() {
         if (dc?._showDbSearch) dc._showDbSearch();
         return;
       }
-      state.editor.getAction('actions.find').run();
+      // Solo ejecutar find si el editor tiene un modelo activo (no en special tabs)
+      try { if (state.editor.getModel()) state.editor.getAction('actions.find')?.run(); } catch {}
     }
   );
 
   // Cmd+H: Find & Replace (Monaco built-in)
   state.editor.addCommand(
     monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyH,
-    () => state.editor.getAction('editor.action.startFindReplaceAction').run()
+    () => { try { if (state.editor.getModel()) state.editor.getAction('editor.action.startFindReplaceAction')?.run(); } catch {} }
   );
 
   // Zoom — addAction (no addCommand) para no cancelar promesas internas de Monaco
@@ -1164,6 +1165,71 @@ function initTreeContextMenu() {
       return;
     }
 
+    // ── Rename: inline input sobre el item del árbol ──
+    if (action === 'rename-file') {
+      const treeItem = document.querySelector(`.tree-item[data-path="${CSS.escape(targetPath)}"]`);
+      if (!treeItem) return;
+
+      const oldName = targetPath.split(/[/\\]/).pop();
+      const parentDir = targetPath.substring(0, targetPath.lastIndexOf('/'));
+      const nameSpan = treeItem.querySelector('.tree-name');
+      const originalText = nameSpan.textContent;
+
+      // Reemplazar el nombre con un input editable
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'tree-inline-input';
+      input.value = oldName;
+      nameSpan.textContent = '';
+      nameSpan.appendChild(input);
+      input.focus();
+      // Seleccionar nombre sin extensión
+      const dotIdx = oldName.lastIndexOf('.');
+      input.setSelectionRange(0, dotIdx > 0 ? dotIdx : oldName.length);
+
+      const finish = async (confirmed) => {
+        const newName = input.value.trim();
+        input.removeEventListener('keydown', onKey);
+        input.removeEventListener('blur', onBlur);
+        nameSpan.textContent = originalText;
+
+        if (!confirmed || !newName || newName === oldName) return;
+
+        const newPath = parentDir + '/' + newName;
+        const result = await window.api.renameFile(targetPath, newPath);
+        if (result.error) {
+          alert(`Error renaming: ${result.error}`);
+          return;
+        }
+
+        // Actualizar tab abierto si existe
+        const openTab = state.openTabs.find(t => t.path === targetPath);
+        if (openTab) {
+          openTab.path = newPath;
+          openTab.name = newName;
+          renderTabs();
+          // Actualizar breadcrumb si es el tab activo
+          if (state.activeTab === openTab) {
+            updateBreadcrumb();
+          }
+        }
+
+        // Refrescar el árbol
+        refreshTreeParent(parentDir);
+      };
+
+      const onKey = (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+        if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+        e.stopPropagation();
+      };
+      const onBlur = () => finish(true);
+
+      input.addEventListener('keydown', onKey);
+      input.addEventListener('blur', onBlur);
+      return;
+    }
+
     // ── Copy Path: copiar la ruta absoluta al clipboard del SO ──
     if (action === 'copy-path') {
       navigator.clipboard.writeText(targetPath);
@@ -1675,8 +1741,20 @@ function activateTab(tab) {
     clearBlame();
     if (special.onActivate) special.onActivate(tab);
   } else {
+    // Guardar viewState del tab anterior antes de cambiar
+    if (state._prevTab && state._prevTab.model && !state._prevTab.path.startsWith('__')) {
+      state._prevTab._viewState = state.editor.saveViewState();
+    }
+    state._prevTab = tab;
+
     // Tab de archivo normal → Monaco editor
     state.editor.setModel(tab.model);
+
+    // Restaurar posición del cursor/scroll si existía
+    if (tab._viewState) {
+      state.editor.restoreViewState(tab._viewState);
+    }
+
     document.getElementById('status-language').textContent =
       getLanguageDisplayName(tab.language);
     state.editor.focus();
@@ -2081,6 +2159,13 @@ function renderTabs() {
  * Se llama tanto para el editor principal como para el editor derecho (split).
  */
 function registerVSCodeKeybindings(ed) {
+  // Helper: ejecutar una acción de Monaco de forma segura.
+  // Previene el crash "InstantiationService has been disposed" cuando
+  // el editor fue destruido (ej: conflict viewer cerrado).
+  const safe = (actionId) => (e) => {
+    try { e.getAction(actionId)?.run(); } catch { /* editor disposed */ }
+  };
+
   // Cmd+/ → Toggle line comment (también Cmd+7 para teclados español donde / = Shift+7)
   ed.addAction({
     id: 'mojavecode.toggleLineComment',
@@ -2089,7 +2174,7 @@ function registerVSCodeKeybindings(ed) {
       monaco.KeyMod.CtrlCmd | monaco.KeyCode.Slash,
       monaco.KeyMod.CtrlCmd | monaco.KeyCode.Digit7,
     ],
-    run: (e) => e.getAction('editor.action.commentLine').run(),
+    run: safe('editor.action.commentLine'),
   });
 
   // Cmd+Shift+/ → Toggle block comment (también Cmd+Shift+A)
@@ -2100,7 +2185,7 @@ function registerVSCodeKeybindings(ed) {
       monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.Slash,
       monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyA,
     ],
-    run: (e) => e.getAction('editor.action.blockComment').run(),
+    run: safe('editor.action.blockComment'),
   });
 
   // Cmd+Shift+K → Delete line
@@ -2108,7 +2193,7 @@ function registerVSCodeKeybindings(ed) {
     id: 'mojavecode.deleteLine',
     label: 'Delete Line',
     keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyK],
-    run: (e) => e.getAction('editor.action.deleteLines').run(),
+    run: safe('editor.action.deleteLines'),
   });
 
   // Alt+Up / Alt+Down → Move line up/down
@@ -2116,13 +2201,13 @@ function registerVSCodeKeybindings(ed) {
     id: 'mojavecode.moveLineUp',
     label: 'Move Line Up',
     keybindings: [monaco.KeyMod.Alt | monaco.KeyCode.UpArrow],
-    run: (e) => e.getAction('editor.action.moveLinesUpAction').run(),
+    run: safe('editor.action.moveLinesUpAction'),
   });
   ed.addAction({
     id: 'mojavecode.moveLineDown',
     label: 'Move Line Down',
     keybindings: [monaco.KeyMod.Alt | monaco.KeyCode.DownArrow],
-    run: (e) => e.getAction('editor.action.moveLinesDownAction').run(),
+    run: safe('editor.action.moveLinesDownAction'),
   });
 
   // Alt+Shift+Up / Alt+Shift+Down → Copy line up/down
@@ -2130,13 +2215,13 @@ function registerVSCodeKeybindings(ed) {
     id: 'mojavecode.copyLineUp',
     label: 'Copy Line Up',
     keybindings: [monaco.KeyMod.Alt | monaco.KeyMod.Shift | monaco.KeyCode.UpArrow],
-    run: (e) => e.getAction('editor.action.copyLinesUpAction').run(),
+    run: safe('editor.action.copyLinesUpAction'),
   });
   ed.addAction({
     id: 'mojavecode.copyLineDown',
     label: 'Copy Line Down',
     keybindings: [monaco.KeyMod.Alt | monaco.KeyMod.Shift | monaco.KeyCode.DownArrow],
-    run: (e) => e.getAction('editor.action.copyLinesDownAction').run(),
+    run: safe('editor.action.copyLinesDownAction'),
   });
 
   // Cmd+D → Add selection to next find match
@@ -2144,7 +2229,7 @@ function registerVSCodeKeybindings(ed) {
     id: 'mojavecode.addSelectionToNextMatch',
     label: 'Add Selection to Next Find Match',
     keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyD],
-    run: (e) => e.getAction('editor.action.addSelectionToNextFindMatch').run(),
+    run: safe('editor.action.addSelectionToNextFindMatch'),
   });
 
   // Cmd+Shift+L → Select all occurrences of find match
@@ -2152,7 +2237,7 @@ function registerVSCodeKeybindings(ed) {
     id: 'mojavecode.selectAllOccurrences',
     label: 'Select All Occurrences',
     keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyL],
-    run: (e) => e.getAction('editor.action.selectHighlights').run(),
+    run: safe('editor.action.selectHighlights'),
   });
 
   // Cmd+L → Select line
@@ -2160,7 +2245,7 @@ function registerVSCodeKeybindings(ed) {
     id: 'mojavecode.selectLine',
     label: 'Select Line',
     keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyL],
-    run: (e) => e.getAction('expandLineSelection').run(),
+    run: safe('expandLineSelection'),
   });
 
   // Cmd+Shift+Enter → Insert line above
@@ -2168,7 +2253,7 @@ function registerVSCodeKeybindings(ed) {
     id: 'mojavecode.insertLineAbove',
     label: 'Insert Line Above',
     keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.Enter],
-    run: (e) => e.getAction('editor.action.insertLineBefore').run(),
+    run: safe('editor.action.insertLineBefore'),
   });
 
   // Cmd+Enter → Insert line below
@@ -2176,7 +2261,7 @@ function registerVSCodeKeybindings(ed) {
     id: 'mojavecode.insertLineBelow',
     label: 'Insert Line Below',
     keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter],
-    run: (e) => e.getAction('editor.action.insertLineAfter').run(),
+    run: safe('editor.action.insertLineAfter'),
   });
 
   // Cmd+] / Cmd+[ → Indent / Outdent
@@ -2184,13 +2269,13 @@ function registerVSCodeKeybindings(ed) {
     id: 'mojavecode.indentLine',
     label: 'Indent Line',
     keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.BracketRight],
-    run: (e) => e.getAction('editor.action.indentLines').run(),
+    run: safe('editor.action.indentLines'),
   });
   ed.addAction({
     id: 'mojavecode.outdentLine',
     label: 'Outdent Line',
     keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.BracketLeft],
-    run: (e) => e.getAction('editor.action.outdentLines').run(),
+    run: safe('editor.action.outdentLines'),
   });
 
   // Cmd+Shift+] / Cmd+Shift+[ → Fold / Unfold
@@ -2198,13 +2283,13 @@ function registerVSCodeKeybindings(ed) {
     id: 'mojavecode.fold',
     label: 'Fold',
     keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.BracketLeft],
-    run: (e) => e.getAction('editor.fold').run(),
+    run: safe('editor.fold'),
   });
   ed.addAction({
     id: 'mojavecode.unfold',
     label: 'Unfold',
     keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.BracketRight],
-    run: (e) => e.getAction('editor.unfold').run(),
+    run: safe('editor.unfold'),
   });
 
   // Cmd+G → Go to line
@@ -2212,7 +2297,7 @@ function registerVSCodeKeybindings(ed) {
     id: 'mojavecode.goToLine',
     label: 'Go to Line',
     keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyG],
-    run: (e) => e.getAction('editor.action.gotoLine').run(),
+    run: safe('editor.action.gotoLine'),
   });
 
   // Cmd+Shift+D → Duplicate selection or line
@@ -2221,17 +2306,19 @@ function registerVSCodeKeybindings(ed) {
     label: 'Duplicate Selection',
     keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyD],
     run: (e) => {
-      const sel = e.getSelection();
-      if (sel.isEmpty()) {
-        e.getAction('editor.action.copyLinesDownAction').run();
-      } else {
-        const text = e.getModel().getValueInRange(sel);
-        e.executeEdits('duplicate', [{
-          range: { startLineNumber: sel.endLineNumber, startColumn: sel.endColumn,
-                   endLineNumber: sel.endLineNumber, endColumn: sel.endColumn },
-          text: text,
-        }]);
-      }
+      try {
+        const sel = e.getSelection();
+        if (sel.isEmpty()) {
+          e.getAction('editor.action.copyLinesDownAction')?.run();
+        } else {
+          const text = e.getModel().getValueInRange(sel);
+          e.executeEdits('duplicate', [{
+            range: { startLineNumber: sel.endLineNumber, startColumn: sel.endColumn,
+                     endLineNumber: sel.endLineNumber, endColumn: sel.endColumn },
+            text: text,
+          }]);
+        }
+      } catch { /* editor disposed */ }
     },
   });
 
@@ -2240,7 +2327,7 @@ function registerVSCodeKeybindings(ed) {
     id: 'mojavecode.triggerParameterHints',
     label: 'Trigger Parameter Hints',
     keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.Space],
-    run: (e) => e.getAction('editor.action.triggerParameterHints').run(),
+    run: safe('editor.action.triggerParameterHints'),
   });
 
   // Ctrl+Space → Trigger suggest (autocomplete)
@@ -2248,7 +2335,7 @@ function registerVSCodeKeybindings(ed) {
     id: 'mojavecode.triggerSuggest',
     label: 'Trigger Suggest',
     keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Space],
-    run: (e) => e.getAction('editor.action.triggerSuggest').run(),
+    run: safe('editor.action.triggerSuggest'),
   });
 
   // ── Context menu: Search in PHP Documentation ──────────────
@@ -3369,6 +3456,139 @@ function renderGitGraph(container, commits) {
         </div>
       </div>
     </div>`;
+
+  // ── Click en un commit → mostrar archivos cambiados y diff ──
+  container.querySelectorAll('.gg-row').forEach((row, idx) => {
+    row.addEventListener('click', async () => {
+      const c = commits[idx];
+      if (!c) return;
+
+      // Toggle: si ya está expandido, colapsarlo
+      const existing = row.nextElementSibling;
+      if (existing && existing.classList.contains('gg-detail')) {
+        existing.remove();
+        row.classList.remove('gg-row-active');
+        return;
+      }
+
+      // Cerrar cualquier otro detalle abierto
+      container.querySelectorAll('.gg-detail').forEach(d => d.remove());
+      container.querySelectorAll('.gg-row-active').forEach(r => r.classList.remove('gg-row-active'));
+
+      row.classList.add('gg-row-active');
+
+      // Placeholder de carga
+      const detail = document.createElement('div');
+      detail.className = 'gg-detail';
+      detail.innerHTML = '<div class="gg-detail-loading">Loading commit details…</div>';
+      row.after(detail);
+
+      const result = await window.api.gitCommitDetail(state.currentFolder, c.hash);
+      if (result.error) {
+        detail.innerHTML = `<div class="gg-detail-error">${escapeHtml(result.error)}</div>`;
+        return;
+      }
+
+      // ── Lista de archivos cambiados ──
+      const statusIcons = {
+        added: '<span class="gg-file-status gg-status-a">A</span>',
+        modified: '<span class="gg-file-status gg-status-m">M</span>',
+        deleted: '<span class="gg-file-status gg-status-d">D</span>',
+        renamed: '<span class="gg-file-status gg-status-r">R</span>',
+        copied: '<span class="gg-file-status gg-status-c">C</span>',
+      };
+
+      let filesHtml = result.files.map((f, fi) =>
+        `<div class="gg-file-row" data-file-idx="${fi}">
+          ${statusIcons[f.status] || `<span class="gg-file-status">${escapeHtml(f.statusCode)}</span>`}
+          <span class="gg-file-name">${escapeHtml(f.file)}</span>
+        </div>`
+      ).join('');
+
+      // ── Parsear diff por archivo ──
+      const fileDiffs = parseDiffByFile(result.diff);
+
+      detail.innerHTML = `
+        <div class="gg-detail-header">
+          <span class="gg-detail-hash">${c.shortHash}</span>
+          <span class="gg-detail-msg">${escapeHtml(c.message)}</span>
+          <span class="gg-detail-meta">${escapeHtml(c.author)} · ${escapeHtml(c.date)} · ${result.files.length} file${result.files.length !== 1 ? 's' : ''}</span>
+        </div>
+        <div class="gg-detail-files">${filesHtml}</div>
+        <div class="gg-detail-diff"></div>
+      `;
+
+      const diffContainer = detail.querySelector('.gg-detail-diff');
+
+      // Click en un archivo → mostrar su diff
+      detail.querySelectorAll('.gg-file-row').forEach(fileRow => {
+        fileRow.addEventListener('click', () => {
+          const fi = parseInt(fileRow.dataset.fileIdx, 10);
+          const file = result.files[fi];
+          if (!file) return;
+
+          // Toggle activo
+          detail.querySelectorAll('.gg-file-row').forEach(r => r.classList.remove('gg-file-active'));
+          fileRow.classList.add('gg-file-active');
+
+          // Buscar el diff de este archivo
+          const fileName = file.file.includes(' → ') ? file.file.split(' → ')[1] : file.file;
+          const fileDiff = fileDiffs.find(d => d.file.includes(fileName)) || null;
+
+          if (fileDiff) {
+            diffContainer.innerHTML = `<pre class="gg-diff-content">${renderDiffLines(fileDiff.lines)}</pre>`;
+          } else {
+            diffContainer.innerHTML = '<div class="gg-detail-loading">No diff available</div>';
+          }
+        });
+      });
+
+      // Auto-click en el primer archivo
+      const firstFile = detail.querySelector('.gg-file-row');
+      if (firstFile) firstFile.click();
+    });
+  });
+}
+
+/**
+ * Parsea la salida de git show --patch en bloques por archivo.
+ * @param {string} diff - Salida completa del diff
+ * @returns {Array<{file: string, lines: string[]}>}
+ */
+function parseDiffByFile(diff) {
+  const files = [];
+  const chunks = diff.split(/^diff --git /m).filter(Boolean);
+
+  for (const chunk of chunks) {
+    const lines = chunk.split('\n');
+    // Primera línea: a/file b/file
+    const headerMatch = lines[0].match(/a\/(.+?)\s+b\/(.+)/);
+    const file = headerMatch ? headerMatch[2] : lines[0];
+    files.push({ file, lines: lines.slice(1) });
+  }
+
+  return files;
+}
+
+/**
+ * Renderiza las líneas de diff con syntax highlighting (added/removed/header).
+ * @param {string[]} lines
+ * @returns {string} HTML
+ */
+function renderDiffLines(lines) {
+  return lines.map(line => {
+    const escaped = escapeHtml(line);
+    if (line.startsWith('+++') || line.startsWith('---')) {
+      return `<span class="gg-diff-meta">${escaped}</span>`;
+    } else if (line.startsWith('@@')) {
+      return `<span class="gg-diff-hunk">${escaped}</span>`;
+    } else if (line.startsWith('+')) {
+      return `<span class="gg-diff-add">${escaped}</span>`;
+    } else if (line.startsWith('-')) {
+      return `<span class="gg-diff-del">${escaped}</span>`;
+    }
+    return `<span>${escaped}</span>`;
+  }).join('\n');
 }
 
 // ┌──────────────────────────────────────────────────┐
@@ -6715,6 +6935,8 @@ function initErrorLog() {
     const msg = args.map((a) =>
       typeof a === 'string' ? a : (a instanceof Error ? a.stack || a.message : JSON.stringify(a, null, 2))
     ).join(' ');
+    // Filtrar ruido interno de Monaco (cancelaciones, editors disposed)
+    if (msg.includes('Canceled: Canceled') || msg.includes('InstantiationService has been disposed')) return;
     errorLog.entries.push({ time: new Date(), message: msg });
     updateErrorBadge();
     showErrorNotice(msg);
@@ -6732,10 +6954,20 @@ function initErrorLog() {
   });
 
   window.addEventListener('unhandledrejection', (e) => {
-    const msg = e.reason instanceof Error
-      ? e.reason.stack || e.reason.message
-      : String(e.reason);
-    const fullMsg = `Unhandled Promise: ${msg}`;
+    // Ignorar cancelaciones internas de Monaco (autocomplete, hover, etc.)
+    // Estas ocurren normalmente al cambiar de archivo o cerrar widgets.
+    const reason = e.reason;
+    if (reason && (reason.name === 'Canceled' || (reason.message && reason.message.startsWith('Canceled')))) {
+      e.preventDefault();
+      return;
+    }
+    // Ignorar errores de InstantiationService disposed (editors destruidos)
+    const reasonStr = reason instanceof Error ? (reason.stack || reason.message) : String(reason);
+    if (reasonStr.includes('InstantiationService has been disposed')) {
+      e.preventDefault();
+      return;
+    }
+    const fullMsg = `Unhandled Promise: ${reasonStr}`;
     errorLog.entries.push({ time: new Date(), message: fullMsg });
     updateErrorBadge();
     showErrorNotice(fullMsg);
@@ -7470,112 +7702,112 @@ function buildCommandRegistry() {
       label: 'Toggle Line Comment',
       category: 'Edit',
       shortcut: '⌘/',
-      action: () => { if (state.editor) state.editor.getAction('editor.action.commentLine').run(); },
+      action: () => { try { state.editor?.getAction('editor.action.commentLine')?.run(); } catch {} },
     },
     {
       id: 'edit.toggleBlockComment',
       label: 'Toggle Block Comment',
       category: 'Edit',
       shortcut: '⌘⇧/',
-      action: () => { if (state.editor) state.editor.getAction('editor.action.blockComment').run(); },
+      action: () => { try { state.editor?.getAction('editor.action.blockComment')?.run(); } catch {} },
     },
     {
       id: 'edit.deleteLine',
       label: 'Delete Line',
       category: 'Edit',
       shortcut: '⌘⇧K',
-      action: () => { if (state.editor) state.editor.getAction('editor.action.deleteLines').run(); },
+      action: () => { try { state.editor?.getAction('editor.action.deleteLines')?.run(); } catch {} },
     },
     {
       id: 'edit.moveLineUp',
       label: 'Move Line Up',
       category: 'Edit',
       shortcut: '⌥↑',
-      action: () => { if (state.editor) state.editor.getAction('editor.action.moveLinesUpAction').run(); },
+      action: () => { try { state.editor?.getAction('editor.action.moveLinesUpAction')?.run(); } catch {} },
     },
     {
       id: 'edit.moveLineDown',
       label: 'Move Line Down',
       category: 'Edit',
       shortcut: '⌥↓',
-      action: () => { if (state.editor) state.editor.getAction('editor.action.moveLinesDownAction').run(); },
+      action: () => { try { state.editor?.getAction('editor.action.moveLinesDownAction')?.run(); } catch {} },
     },
     {
       id: 'edit.copyLineUp',
       label: 'Copy Line Up',
       category: 'Edit',
       shortcut: '⌥⇧↑',
-      action: () => { if (state.editor) state.editor.getAction('editor.action.copyLinesUpAction').run(); },
+      action: () => { try { state.editor?.getAction('editor.action.copyLinesUpAction')?.run(); } catch {} },
     },
     {
       id: 'edit.copyLineDown',
       label: 'Copy Line Down',
       category: 'Edit',
       shortcut: '⌥⇧↓',
-      action: () => { if (state.editor) state.editor.getAction('editor.action.copyLinesDownAction').run(); },
+      action: () => { try { state.editor?.getAction('editor.action.copyLinesDownAction')?.run(); } catch {} },
     },
     {
       id: 'edit.duplicateLine',
       label: 'Duplicate Selection',
       category: 'Edit',
       shortcut: '⌘⇧D',
-      action: () => { if (state.editor) state.editor.getAction('mojavecode.duplicateLine')?.run(); },
+      action: () => { try { state.editor?.getAction('mojavecode.duplicateLine')?.run(); } catch {} },
     },
     {
       id: 'edit.addSelectionToNextMatch',
       label: 'Add Selection to Next Find Match',
       category: 'Edit',
       shortcut: '⌘D',
-      action: () => { if (state.editor) state.editor.getAction('editor.action.addSelectionToNextFindMatch').run(); },
+      action: () => { try { state.editor?.getAction('editor.action.addSelectionToNextFindMatch')?.run(); } catch {} },
     },
     {
       id: 'edit.selectAllOccurrences',
       label: 'Select All Occurrences',
       category: 'Edit',
       shortcut: '⌘⇧L',
-      action: () => { if (state.editor) state.editor.getAction('editor.action.selectHighlights').run(); },
+      action: () => { try { state.editor?.getAction('editor.action.selectHighlights')?.run(); } catch {} },
     },
     {
       id: 'edit.selectLine',
       label: 'Select Line',
       category: 'Edit',
       shortcut: '⌘L',
-      action: () => { if (state.editor) state.editor.getAction('expandLineSelection').run(); },
+      action: () => { try { state.editor?.getAction('expandLineSelection')?.run(); } catch {} },
     },
     {
       id: 'edit.indentLine',
       label: 'Indent Line',
       category: 'Edit',
       shortcut: '⌘]',
-      action: () => { if (state.editor) state.editor.getAction('editor.action.indentLines').run(); },
+      action: () => { try { state.editor?.getAction('editor.action.indentLines')?.run(); } catch {} },
     },
     {
       id: 'edit.outdentLine',
       label: 'Outdent Line',
       category: 'Edit',
       shortcut: '⌘[',
-      action: () => { if (state.editor) state.editor.getAction('editor.action.outdentLines').run(); },
+      action: () => { try { state.editor?.getAction('editor.action.outdentLines')?.run(); } catch {} },
     },
     {
       id: 'edit.fold',
       label: 'Fold',
       category: 'Edit',
       shortcut: '⌘⇧[',
-      action: () => { if (state.editor) state.editor.getAction('editor.fold').run(); },
+      action: () => { try { state.editor?.getAction('editor.fold')?.run(); } catch {} },
     },
     {
       id: 'edit.unfold',
       label: 'Unfold',
       category: 'Edit',
       shortcut: '⌘⇧]',
-      action: () => { if (state.editor) state.editor.getAction('editor.unfold').run(); },
+      action: () => { try { state.editor?.getAction('editor.unfold')?.run(); } catch {} },
     },
     {
       id: 'go.goToLine',
       label: 'Go to Line...',
       category: 'Go',
       shortcut: '⌘G',
-      action: () => { if (state.editor) state.editor.getAction('editor.action.gotoLine').run(); },
+      action: () => { try { state.editor?.getAction('editor.action.gotoLine')?.run(); } catch {} },
     },
 
     // ── PHP ─────────────────────────────────────────────────────
@@ -7618,7 +7850,7 @@ function buildCommandRegistry() {
       id: 'refactor.rename',
       label: 'Rename Symbol (F2)',
       category: 'Refactor',
-      action: () => { if (state.editor) state.editor.getAction('editor.action.rename')?.run(); },
+      action: () => { try { state.editor?.getAction('editor.action.rename')?.run(); } catch {} },
     },
 
     // ── Theme ──────────────────────────────────────────────────

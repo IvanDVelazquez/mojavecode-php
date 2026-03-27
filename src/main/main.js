@@ -756,7 +756,7 @@ function createMenu() {
             dialog.showMessageBox(mainWindow, {
               type: 'info',
               title: 'MojaveCode PHP',
-              message: 'MojaveCode PHP v3.6.0',
+              message: 'MojaveCode PHP v3.7.0',
               detail: 'A lightweight code editor by MojaveWare.\nBuilt with Electron + Monaco + xterm.js',
             });
           },
@@ -1389,6 +1389,16 @@ ipcMain.handle('fs:copyFile', async (event, srcPath, destPath) => {
   }
 });
 
+// Renombrar archivo o carpeta (usado por el context menu del file tree)
+ipcMain.handle('fs:rename', async (event, oldPath, newPath) => {
+  try {
+    await fs.promises.rename(oldPath, newPath);
+    return { success: true, error: null };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
 /**
  * Listar los archivos de log en storage/logs.
  *
@@ -1966,6 +1976,39 @@ ipcMain.handle('git:graphLog', async (event, cwd, limit) => {
   });
 
   return { commits };
+});
+
+/**
+ * Obtiene los archivos modificados en un commit específico con su diff.
+ * Usa git show --stat para la lista de archivos y git show para el diff completo.
+ *
+ * @param {string} cwd - Directorio del repositorio
+ * @param {string} hash - Hash del commit
+ * @returns {{ files: Array<{file, status, additions, deletions}>, diff: string, error?: string }}
+ */
+ipcMain.handle('git:commitDetail', async (event, cwd, hash) => {
+  // Lista de archivos cambiados con stats
+  const filesResult = await runGit(
+    ['show', hash, '--name-status', '--format='],
+    cwd
+  );
+  // Diff completo
+  const diffResult = await runGit(
+    ['show', hash, '--format=', '--patch'],
+    cwd
+  );
+
+  if (filesResult.error) return { files: [], diff: '', error: filesResult.error };
+
+  const statusMap = { A: 'added', M: 'modified', D: 'deleted', R: 'renamed', C: 'copied' };
+  const files = (filesResult.output || '').split('\n').filter(Boolean).map(line => {
+    const parts = line.split('\t');
+    const statusCode = parts[0].charAt(0);
+    const file = parts.length > 2 ? `${parts[1]} → ${parts[2]}` : (parts[1] || '');
+    return { file, status: statusMap[statusCode] || statusCode, statusCode };
+  });
+
+  return { files, diff: diffResult.output || '' };
 });
 
 // ────────────────────────────────────────────

@@ -453,6 +453,14 @@ No additional runtime dependencies for database access (uses `mysql`/`psql` CLI)
 
 ## Changelog
 
+### v3.7.0
+
+- **Git Graph Commit Detail** — Click any commit in the Git Graph to expand a detail panel showing changed files (with A/M/D/R badges) and a syntax-highlighted diff viewer. Click a file to see its specific changes
+- **Rename in File Tree** — Right-click any file or folder and select "Rename" for inline editing. Pre-selects the name without extension, updates open tabs and breadcrumb automatically
+- **Restore Cursor Position** — Switching between tabs now preserves and restores cursor position, scroll offset, selections, and fold state
+- **Monaco Error Noise Filter** — Silences internal Monaco "Canceled" and "InstantiationService disposed" errors that are normal behavior during tab switches. All `getAction().run()` calls wrapped with safe guards
+- **PHP Function Descriptions** — Every function in the PHP Reference panel now shows a one-line description (~300 curated, rest inferred). Search matches descriptions too
+
 ### v3.6.0
 
 - **Framework Detection** — Automatically detects Laravel, Slim, or Symfony projects from `composer.json`. Shows a colored badge in the status bar (red for Laravel, green for Slim, black for Symfony)

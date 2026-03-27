@@ -470,6 +470,14 @@ Sin dependencias adicionales de runtime para acceso a base de datos (usa CLI de 
 
 ## Changelog
 
+### v3.7.0
+
+- **Detalle de Commit en Git Graph** — Click en cualquier commit del Git Graph para expandir un panel con archivos cambiados (badges A/M/D/R) y un visor de diff con syntax highlighting. Click en un archivo para ver sus cambios específicos
+- **Renombrar en File Tree** — Click derecho en cualquier archivo o carpeta → "Rename" para edición inline. Pre-selecciona el nombre sin extensión, actualiza tabs abiertos y breadcrumb automáticamente
+- **Restaurar Posición del Cursor** — Cambiar entre tabs ahora preserva y restaura posición del cursor, scroll, selecciones y estado de fold
+- **Filtro de Ruido Monaco** — Silencia errores internos de Monaco ("Canceled" y "InstantiationService disposed") que son comportamiento normal al cambiar tabs. Todas las llamadas `getAction().run()` protegidas con guards
+- **Descripciones de Funciones PHP** — Cada función en el panel de Referencia PHP muestra una descripción (~300 curadas, resto inferidas). La búsqueda también filtra por descripción
+
 ### v3.6.0
 
 - **Detección de Framework** — Detecta automáticamente proyectos Laravel, Slim o Symfony desde `composer.json`. Muestra un badge de color en la barra de estado (rojo Laravel, verde Slim, negro Symfony)

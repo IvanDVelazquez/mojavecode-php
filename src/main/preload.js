@@ -54,6 +54,7 @@ contextBridge.exposeInMainWorld('api', {
   // ── File operations (context menu del file tree) ──
   deleteFile: (targetPath) => ipcRenderer.invoke('fs:deleteFile', targetPath),
   copyFile: (srcPath, destPath) => ipcRenderer.invoke('fs:copyFile', srcPath, destPath),
+  renameFile: (oldPath, newPath) => ipcRenderer.invoke('fs:rename', oldPath, newPath),
   createFile: (filePath) => ipcRenderer.invoke('fs:createFile', filePath),
   createDir: (dirPath) => ipcRenderer.invoke('fs:createDir', dirPath),
 
@@ -143,6 +144,7 @@ contextBridge.exposeInMainWorld('api', {
   gitPush: (cwd) => ipcRenderer.invoke('git:push', cwd),
   gitPull: (cwd) => ipcRenderer.invoke('git:pull', cwd),
   gitGraphLog: (cwd, limit) => ipcRenderer.invoke('git:graphLog', cwd, limit),
+  gitCommitDetail: (cwd, hash) => ipcRenderer.invoke('git:commitDetail', cwd, hash),
   gitListBranches: (cwd) => ipcRenderer.invoke('git:listBranches', cwd),
   gitCheckout: (cwd, branch) => ipcRenderer.invoke('git:checkout', cwd, branch),
 
